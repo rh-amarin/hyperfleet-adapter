@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hyperfleet-adapter.fullname" . }}
+  labels:
+    {{- include "hyperfleet-adapter.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "hyperfleet-adapter.selectorLabels" . | nindent 4 }}
+

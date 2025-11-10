@@ -1,0 +1,117 @@
+# Default values for hyperfleet-adapter
+# This is a YAML-formatted file.
+
+replicaCount: 1
+
+image:
+  registry: quay.io/openshift-hyperfleet
+  repository: hyperfleet-adapter
+  pullPolicy: Always
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 65532
+  runAsNonRoot: true
+  runAsUser: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Adapter configuration
+config:
+  # Use ConfigMap for adapter config
+  # If enabled, creates a ConfigMap and mounts it
+  # If disabled, uses packaged config from image
+  enabled: true
+  # ConfigMap name (if different from default)
+  configMapName: ""
+  # Adapter type identifier (e.g., "example", "gcp", "aws")
+  adapterType: ""
+  # Environment variables for ConfigMap (matching adapther-configmap-template.yaml structure)
+  # Example for RabbitMQ:
+  #   BROKER_TYPE: "rabbitmq"
+  #   BROKER_HOST: "rabbitmq.hyperfleet-system.svc.cluster.local"
+  #   BROKER_PORT: "5672"
+  #   BROKER_QUEUE_NAME: "hyperfleet-cluster-events"
+  #   BROKER_EXCHANGE: "hyperfleet-events"
+  #   BROKER_MAX_CONCURRENCY: "100"
+  env: {}
+  # Alternative: YAML format configuration file (if adapter reads from adapter.yaml file)
+  # This will create adapter.yaml key in ConfigMap
+  adapterYaml: ""
+
+# Broker configuration
+broker:
+  # Broker ConfigMap name (must exist in cluster)
+  # This ConfigMap contains BROKER_TYPE, BROKER_HOST, BROKER_PORT, etc. as env vars
+  # See adapther-configmap-template.yaml for structure
+  configMapName: ""
+  # Mount broker ConfigMap as environment variables (recommended, matches template)
+  # If false, mounts as file at /etc/adapter/config/broker.yaml
+  mountAsEnv: true
+  # List of environment variable keys to mount from broker ConfigMap
+  # If empty and mountAsEnv=true, all keys will be available via envFrom
+  # Common keys: BROKER_TYPE, BROKER_HOST, BROKER_PORT, BROKER_QUEUE_NAME, etc.
+  envKeys: []
+  # ConfigMap key name (used only if mountAsEnv=false, default: broker.yaml)
+  configMapKey: broker.yaml
+
+# Environment variables
+env: []
+  # - name: CONFIG_FILE
+  #   value: /path/to/custom/config.yaml
+  # - name: BROKER_CONFIG_FILE
+  #   value: /path/to/custom/broker-config.yaml
+
+# Volume mounts for additional configs
+extraVolumeMounts: []
+
+# Additional volumes
+extraVolumes: []
+
