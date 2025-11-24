@@ -1,4 +1,4 @@
-package k8sclient
+package k8s_client
 
 // This file contains test-only helpers and constants.
 // DO NOT use these in production code - they are for testing purposes only.
@@ -13,12 +13,12 @@ import (
 // Production code must extract GVK from config using GVKFromKindAndApiVersion().
 //
 // Available only in test builds for:
-//   - Unit tests (internal/k8s-client/*_test.go)
-//   - Integration tests (test/integration/k8s-client/*_test.go)
+//   - Unit tests (internal/k8s_client/*_test.go)
+//   - Integration tests (test/integration/k8s_client/*_test.go)
 //
 // Example usage in tests:
 //   ns := &unstructured.Unstructured{...}
-//   ns.SetGroupVersionKind(k8sclient.CommonResourceKinds.Namespace)
+//   ns.SetGroupVersionKind(k8s_client.CommonResourceKinds.Namespace)
 //   _, err := client.CreateResource(ctx, ns)
 var CommonResourceKinds = struct {
 	// Core resources (v1)

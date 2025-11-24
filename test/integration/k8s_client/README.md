@@ -1,6 +1,6 @@
 # K8s Client Integration Tests
 
-Integration tests for the Kubernetes client (`internal/k8s-client`) using real Kubernetes API servers.
+Integration tests for the Kubernetes client (`internal/k8s_client`) using real Kubernetes API servers.
 
 ## Quick Start
 
@@ -36,7 +36,7 @@ These integration tests verify:
 ## Test Files
 
 ```
-test/integration/k8s-client/
+test/integration/k8s_client/
 ├── README.md                       # This file
 ├── helper_selector.go              # Strategy selection
 ├── helper_envtest_prebuilt.go      # Pre-built testing with envtest implementation
@@ -62,18 +62,18 @@ The Makefile automatically handles:
 - Environment variable setup
 - Container runtime detection
 
-### Advanced: Run k8s-client Tests Only
+### Advanced: Run k8s_client Tests Only
 
-If you need to run only k8s-client tests:
+If you need to run only k8s_client tests:
 
 ```bash
 # Pre-built envtest strategy
 INTEGRATION_ENVTEST_IMAGE=localhost/hyperfleet-integration-test:latest \
-  go test -v -tags=integration ./test/integration/k8s-client/... -timeout 30m
+  go test -v -tags=integration ./test/integration/k8s_client/... -timeout 30m
 
 # K3s strategy
 INTEGRATION_STRATEGY=k3s \
-  go test -v -tags=integration ./test/integration/k8s-client/... -timeout 30m
+  go test -v -tags=integration ./test/integration/k8s_client/... -timeout 30m
 ```
 
 **Note**: Direct `go test` requires manual setup. Use `make test-integration` for proper configuration.
@@ -83,7 +83,7 @@ INTEGRATION_STRATEGY=k3s \
 **Pre-built Envtest Strategy:**
 ```
 PASS
-ok  github.com/openshift-hyperfleet/hyperfleet-adapter/test/integration/k8s-client  192.048s
+ok  github.com/openshift-hyperfleet/hyperfleet-adapter/test/integration/k8s_client  192.048s
 ```
 - 10 test suites, each creating fresh containers
 - ~19s per test suite (container startup + API server initialization)
@@ -91,7 +91,7 @@ ok  github.com/openshift-hyperfleet/hyperfleet-adapter/test/integration/k8s-clie
 **K3s Strategy:**
 ```
 PASS
-ok  github.com/openshift-hyperfleet/hyperfleet-adapter/test/integration/k8s-client  26.148s
+ok  github.com/openshift-hyperfleet/hyperfleet-adapter/test/integration/k8s_client  26.148s
 ```
 - 10 test suites, each creating fresh K3s clusters
 - ~2-3s per test suite
@@ -199,6 +199,6 @@ See the main documentation for detailed troubleshooting:
 ## Additional Resources
 
 - [Main Integration Test Documentation](../README.md)
-- [k8s-client Package Documentation](../../../internal/k8s-client/README.md)
+- [k8s_client Package Documentation](../../../internal/k8s_client/README.md)
 - [Testcontainers for Go](https://golang.testcontainers.org/)
 - [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime)

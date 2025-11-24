@@ -1,0 +1,159 @@
+# Broker ConfigMap Template for Google Pub/Sub
+# This ConfigMap provides broker configuration for the hyperfleet-adapter to consume CloudEvents from Google Pub/Sub
+#
+# Usage:
+#   1. Copy this template and customize values for your environment
+#   2. Apply to your Kubernetes cluster: kubectl apply -f broker-configmap-pubsub.yaml
+#   3. Mount as a file in your adapter deployment (see example below)
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hyperfleet-broker-config
+  namespace: hyperfleet-system
+  labels:
+    app.kubernetes.io/name: hyperfleet-adapter
+    app.kubernetes.io/component: broker-config
+    hyperfleet.io/broker-type: googlepubsub
+data:
+  # ============================================================================
+  # Adapter-specific Configuration
+  # ============================================================================
+  # REQUIRED: The subscription that the adapter should consume from
+  # This is used by the broker consumer, not the broker library
+  SUBSCRIPTION_ID: "hyperfleet-adapter-subscription"
+
+  # REQUIRED: The topic that the adapter should consume from
+  # This is used by the broker consumer, not the broker library
+  TOPIC: "hyperfleet-adapter-topic"
+
+  # ============================================================================
+  # Broker Configuration (broker.yaml)
+  # ============================================================================
+  # This is the standard configuration format for hyperfleet-broker library
+  # Mount this file at /etc/broker/broker.yaml (or set BROKER_CONFIG_FILE)
+  # 
+  # Note: You can override any setting using environment variables:
+  #   BROKER_TYPE=googlepubsub
+  #   BROKER_GOOGLEPUBSUB_PROJECT_ID=my-project
+  #   SUBSCRIBER_PARALLELISM=5
+  broker.yaml: |
+    broker:
+      # Broker type: "rabbitmq" or "googlepubsub"
+      type: googlepubsub
+      
+      # Google Pub/Sub Configuration
+      googlepubsub:
+        # GCP Project ID (required for googlepubsub)
+        project_id: "my-gcp-project"
+        
+        # Topic name (optional, can be specified per publish/subscribe call)
+        topic: ""
+        
+        # Subscription name (optional, can be specified per subscribe call)
+        subscription: ""
+        
+        # Maximum outstanding messages (optional, default: 1000)
+        max_outstanding_messages: 1000
+        
+        # Number of goroutines for Pub/Sub client (optional, default: 10)
+        num_goroutines: 10
+
+    # Subscriber Configuration
+    subscriber:
+      # Number of parallel workers for processing messages (default: 1)
+      parallelism: 10
+
+---
+# ============================================================================
+# Example Deployment
+# ============================================================================
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata:
+#   name: hyperfleet-adapter
+#   namespace: hyperfleet-system
+# spec:
+#   replicas: 1
+#   selector:
+#     matchLabels:
+#       app: hyperfleet-adapter
+#   template:
+#     metadata:
+#       labels:
+#         app: hyperfleet-adapter
+#     spec:
+#       serviceAccountName: hyperfleet-adapter
+#       containers:
+#       - name: adapter
+#         image: quay.io/openshift-hyperfleet/hyperfleet-adapter:latest
+#         imagePullPolicy: Always
+#         env:
+#         # Adapter-specific configuration
+#         - name: SUBSCRIPTION_ID
+#           valueFrom:
+#             configMapKeyRef:
+#               name: hyperfleet-broker-config
+#               key: SUBSCRIPTION_ID
+#         # Point to broker config file
+#         - name: BROKER_CONFIG_FILE
+#           value: /etc/broker/broker.yaml
+#         # Optional: Override broker.yaml settings with environment variables
+#         # - name: BROKER_GOOGLEPUBSUB_PROJECT_ID
+#         #   value: "my-other-project"
+#         # - name: SUBSCRIBER_PARALLELISM
+#         #   value: "5"
+#         volumeMounts:
+#         - name: broker-config
+#           mountPath: /etc/broker
+#           readOnly: true
+#       volumes:
+#       - name: broker-config
+#         configMap:
+#           name: hyperfleet-broker-config
+#           items:
+#           - key: broker.yaml
+#             path: broker.yaml
+
+---
+# ============================================================================
+# Optional: GCP Service Account Secret (if not using Workload Identity)
+# ============================================================================
+# If running outside GKE or not using Workload Identity, create a secret
+# with your GCP service account key:
+#
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: gcp-service-account-key
+#   namespace: hyperfleet-system
+# type: Opaque
+# stringData:
+#   key.json: |
+#     {
+#       "type": "service_account",
+#       "project_id": "my-gcp-project",
+#       "private_key_id": "...",
+#       "private_key": "...",
+#       "client_email": "...",
+#       ...
+#     }
+#
+# Then mount it in your deployment:
+# spec:
+#   template:
+#     spec:
+#       containers:
+#       - name: adapter
+#         env:
+#         - name: GOOGLE_APPLICATION_CREDENTIALS
+#           value: /var/secrets/google/key.json
+#         volumeMounts:
+#         - name: gcp-credentials
+#           mountPath: /var/secrets/google
+#           readOnly: true
+#       volumes:
+#       - name: gcp-credentials
+#         secret:
+#           secretName: gcp-service-account-key
+

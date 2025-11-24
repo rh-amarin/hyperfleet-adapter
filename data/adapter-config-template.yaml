@@ -1,9 +1,0 @@
-# placeholder for adapter config template
-kind: AdapterConfig
-metadata:
-  # Adapter name (used as resource name and in logs/metrics)
-  name: example-adapter
-  namespace: hyperfleet-system
-  labels:
-    hyperfleet.io/adapter-type: example
-    hyperfleet.io/component: adapter

@@ -1,0 +1,234 @@
+// Package testutil provides common utilities for integration tests using testcontainers.
+// This package centralizes container lifecycle management to reduce code duplication
+// across different integration test suites.
+package testutil
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/docker/go-connections/nat"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
+)
+
+// ContainerConfig holds configuration for starting a container
+type ContainerConfig struct {
+	// Image is the container image to use (required)
+	Image string
+
+	// ExposedPorts is a list of ports to expose (e.g., "8080/tcp")
+	ExposedPorts []string
+
+	// Cmd is the command to run in the container
+	Cmd []string
+
+	// Env is a map of environment variables to set
+	Env map[string]string
+
+	// WaitStrategy is the strategy to wait for container readiness
+	WaitStrategy wait.Strategy
+
+	// StartupTimeout is the maximum time to wait for container to start (default: 180s)
+	StartupTimeout time.Duration
+
+	// CleanupTimeout is the maximum time to wait for container cleanup (default: 30s)
+	CleanupTimeout time.Duration
+
+	// MaxRetries is the number of times to retry container creation (default: 1, no retries)
+	MaxRetries int
+
+	// RetryDelay is the base delay between retries (default: 1s, increases with attempt number)
+	RetryDelay time.Duration
+
+	// Name is a human-readable name for logging purposes
+	Name string
+}
+
+// ContainerResult holds the result of starting a container
+type ContainerResult struct {
+	// Container is the testcontainers container instance
+	Container testcontainers.Container
+
+	// Host is the container host
+	Host string
+
+	// Ports maps exposed port specs (e.g., "8080/tcp") to their mapped ports
+	Ports map[string]string
+}
+
+// GetEndpoint returns the host:port endpoint for the given port spec
+func (r *ContainerResult) GetEndpoint(portSpec string) string {
+	if port, ok := r.Ports[portSpec]; ok {
+		return fmt.Sprintf("%s:%s", r.Host, port)
+	}
+	return ""
+}
+
+// DefaultContainerConfig returns a ContainerConfig with sensible defaults
+func DefaultContainerConfig() ContainerConfig {
+	return ContainerConfig{
+		StartupTimeout: 180 * time.Second,
+		CleanupTimeout: 30 * time.Second,
+		MaxRetries:     1,
+		RetryDelay:     time.Second,
+		Name:           "container",
+	}
+}
+
+// StartContainer starts a container with the given configuration.
+// It automatically registers cleanup with t.Cleanup() to ensure the container
+// is stopped and removed when the test completes (even on failure or panic).
+//
+// Example:
+//
+//	config := testutil.DefaultContainerConfig()
+//	config.Image = "redis:latest"
+//	config.ExposedPorts = []string{"6379/tcp"}
+//	config.WaitStrategy = wait.ForListeningPort("6379/tcp")
+//
+//	result, err := testutil.StartContainer(t, config)
+//	require.NoError(t, err)
+//
+//	endpoint := result.GetEndpoint("6379/tcp") // e.g., "localhost:32768"
+func StartContainer(t *testing.T, config ContainerConfig) (*ContainerResult, error) {
+	t.Helper()
+
+	// Apply defaults for zero values
+	if config.StartupTimeout == 0 {
+		config.StartupTimeout = 180 * time.Second
+	}
+	if config.CleanupTimeout == 0 {
+		config.CleanupTimeout = 30 * time.Second
+	}
+	if config.MaxRetries == 0 {
+		config.MaxRetries = 1
+	}
+	if config.RetryDelay == 0 {
+		config.RetryDelay = time.Second
+	}
+	if config.Name == "" {
+		config.Name = "container"
+	}
+
+	ctx := context.Background()
+
+	t.Logf("Starting %s container (image: %s)...", config.Name, config.Image)
+
+	// Build container request
+	req := testcontainers.ContainerRequest{
+		Image:        config.Image,
+		ExposedPorts: config.ExposedPorts,
+		Cmd:          config.Cmd,
+		Env:          config.Env,
+		WaitingFor:   config.WaitStrategy,
+	}
+
+	// Create container with retries
+	var container testcontainers.Container
+	var err error
+
+	for attempt := 1; attempt <= config.MaxRetries; attempt++ {
+		if attempt > 1 {
+			delay := config.RetryDelay * time.Duration(attempt)
+			t.Logf("Retry attempt %d/%d for %s container (waiting %v)...", attempt, config.MaxRetries, config.Name, delay)
+			time.Sleep(delay)
+		}
+
+		// Create context with timeout for this attempt
+		attemptCtx, cancel := context.WithTimeout(ctx, config.StartupTimeout)
+
+		container, err = testcontainers.GenericContainer(attemptCtx, testcontainers.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          true,
+		})
+
+		cancel() // Clean up the context
+
+		if err == nil {
+			break // Success!
+		}
+
+		if attempt < config.MaxRetries {
+			t.Logf("Attempt %d failed for %s container: %v", attempt, config.Name, err)
+		}
+	}
+
+	// Register cleanup BEFORE checking error to ensure container cleanup even on partial failure
+	if container != nil {
+		t.Cleanup(func() {
+			t.Logf("Stopping and removing %s container...", config.Name)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), config.CleanupTimeout)
+			defer cancel()
+			if termErr := container.Terminate(cleanupCtx); termErr != nil {
+				t.Logf("Warning: Failed to terminate %s container: %v", config.Name, termErr)
+			} else {
+				t.Logf("%s container stopped and removed successfully", config.Name)
+			}
+		})
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to start %s container after %d attempts: %w", config.Name, config.MaxRetries, err)
+	}
+
+	// Get container host
+	host, err := container.Host(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get %s container host: %w", config.Name, err)
+	}
+
+	// Get all mapped ports
+	ports := make(map[string]string)
+	for _, portSpec := range config.ExposedPorts {
+		port, err := container.MappedPort(ctx, nat.Port(portSpec))
+		if err != nil {
+			return nil, fmt.Errorf("failed to get mapped port %s for %s container: %w", portSpec, config.Name, err)
+		}
+		ports[portSpec] = port.Port()
+	}
+
+	t.Logf("%s container started successfully (host: %s)", config.Name, host)
+
+	return &ContainerResult{
+		Container: container,
+		Host:      host,
+		Ports:     ports,
+	}, nil
+}
+
+// WaitStrategies provides common wait strategy builders
+var WaitStrategies = struct {
+	// ForLogAndPort creates a wait strategy that waits for both a log message and a listening port
+	ForLogAndPort func(logMessage string, portSpec string, timeout time.Duration) wait.Strategy
+
+	// ForPort creates a wait strategy that waits for a listening port
+	ForPort func(portSpec string, timeout time.Duration) wait.Strategy
+
+	// ForLog creates a wait strategy that waits for a log message
+	ForLog func(logMessage string, timeout time.Duration) wait.Strategy
+
+	// ForHTTP creates a wait strategy that waits for an HTTP endpoint
+	ForHTTP func(path string, portSpec string, timeout time.Duration) wait.Strategy
+}{
+	ForLogAndPort: func(logMessage string, portSpec string, timeout time.Duration) wait.Strategy {
+		return wait.ForAll(
+			wait.ForLog(logMessage).WithStartupTimeout(timeout),
+			wait.ForListeningPort(nat.Port(portSpec)).WithStartupTimeout(timeout),
+		)
+	},
+	ForPort: func(portSpec string, timeout time.Duration) wait.Strategy {
+		return wait.ForListeningPort(nat.Port(portSpec)).WithStartupTimeout(timeout)
+	},
+	ForLog: func(logMessage string, timeout time.Duration) wait.Strategy {
+		return wait.ForLog(logMessage).WithStartupTimeout(timeout)
+	},
+	ForHTTP: func(path string, portSpec string, timeout time.Duration) wait.Strategy {
+		return wait.ForHTTP(path).
+			WithPort(nat.Port(portSpec)).
+			WithStartupTimeout(timeout)
+	},
+}
+

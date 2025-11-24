@@ -1,4 +1,4 @@
-package k8sclient
+package k8s_client
 
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -14,12 +14,12 @@ import (
 //   // From adapter-config-template.yaml:
 //   //   - kind: "Deployment"
 //   //     apiVersion: "apps/v1"
-//   
+//
 //   gvk, err := GVKFromKindAndApiVersion(resource.Kind, resource.ApiVersion)
 //   if err != nil {
 //       return fmt.Errorf("invalid GVK in config: %w", err)
 //   }
-//   
+//
 //   // Now use gvk with client operations:
 //   obj, err := client.GetResource(ctx, gvk, namespace, name)
 func GVKFromKindAndApiVersion(kind, apiVersion string) (schema.GroupVersionKind, error) {

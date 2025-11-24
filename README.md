@@ -83,13 +83,12 @@ hyperfleet-adapter/
 │   ├── errors/           # Error handling utilities
 │   └── logger/           # Structured logging with context support
 ├── internal/
-│   ├── broker-consumer/  # Message broker consumer implementations
+│   ├── broker_consumer/  # Message broker consumer implementations
 │   ├── config-loader/    # Configuration loading logic
 │   ├── criteria/         # Precondition evaluation
-│   ├── hyperfleet-api/   # HyperFleet API client
+│   ├── hyperfleet_api/   # HyperFleet API client
 │   └── k8s-objects/      # Kubernetes object management
 ├── test/                 # Integration tests
-├── data/                 # Configuration templates
 ├── charts/               # Helm chart for Kubernetes deployment
 ├── Dockerfile            # Multi-stage Docker build
 ├── Makefile              # Build and test automation
@@ -121,11 +120,10 @@ hyperfleet-adapter/
 
 The adapter supports multiple configuration sources with the following priority order:
 
-1. **Environment Variable** (`CONFIG_FILE`) - Highest priority
+1. **Environment Variable** (`ADAPTER_CONFIG_FILE`) - Highest priority
 2. **ConfigMap Mount** (`/etc/adapter/config/adapter.yaml`)
-3. **Packaged Config** (`/app/configs/adapter.yaml`) - Fallback
 
-See `data/adapter-config-template.yaml` for configuration template.
+See `configs/adapter-config-template.yaml` for configuration template.
 
 ### Broker Configuration
 
@@ -240,7 +238,7 @@ The first run will download golang:alpine and install envtest (~20-30 seconds). 
 
 </details>
 
-📖 **Full guide:** [`test/integration/k8s-client/README.md`](test/integration/k8s-client/README.md)
+📖 **Full guide:** [`test/integration/k8s_client/README.md`](test/integration/k8s_client/README.md)
 
 ### Test Coverage
 
@@ -309,7 +307,6 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](./LICE
 
 - [Helm Chart Documentation](./charts/README.md)
 - [Contributing Guidelines](./CONTRIBUTING.md)
-- [Configuration Template](./data/adapter-config-template.yaml)
 
 ## Support
 

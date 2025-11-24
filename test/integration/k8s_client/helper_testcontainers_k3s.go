@@ -1,6 +1,6 @@
-//go:build integration
+// This file contains helper functions for setting up a test environment using testcontainers and K3s.
 
-package k8sclient_integration
+package k8s_client_integration
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	k8sclient "github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s-client"
+	k8s_client "github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -25,7 +25,7 @@ import (
 // TestEnvTestcontainers holds the test environment for integration tests using testcontainers
 type TestEnvTestcontainers struct {
 	Container *k3s.K3sContainer
-	Client    *k8sclient.Client
+	Client    *k8s_client.Client
 	Ctx       context.Context
 	Log       logger.Logger
 }
@@ -117,7 +117,7 @@ func SetupTestEnvTestcontainers(t *testing.T) *TestEnvTestcontainers {
 	}
 
 	// Create k8s client using the K3s config
-	client, err := k8sclient.NewClientFromConfig(ctx, restConfig, log)
+	client, err := k8s_client.NewClientFromConfig(ctx, restConfig, log)
 	require.NoError(t, err, "Failed to create k8s client")
 	require.NotNil(t, client, "Client is nil")
 
@@ -127,6 +127,11 @@ func SetupTestEnvTestcontainers(t *testing.T) *TestEnvTestcontainers {
 	if !waitForAdmissionControllers(ctx, restConfig, 30*time.Second, log) {
 		log.Infof("Warning: Admission controllers may not be fully ready, but continuing...")
 	}
+
+	// Create default namespace (envtest doesn't create it automatically)
+	log.Infof("Creating default namespace...")
+	createDefaultNamespace(t, client, ctx)
+	log.Infof("Default namespace ready")
 
 	log.Infof("K3s test environment ready")
 

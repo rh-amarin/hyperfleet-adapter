@@ -2,11 +2,11 @@
 
 Kubernetes client wrapper for dynamic resource operations in the HyperFleet adapter framework.
 
-**Package:** `github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s-client`
+**Package:** `github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client`
 
 ## Overview
 
-The k8s-client package provides foundational Kubernetes API operations using **controller-runtime**:
+The k8s_client package provides foundational Kubernetes API operations using **controller-runtime**:
 - Create, Get, List, Update, Delete, and Patch any Kubernetes resource
 - Support for both namespaced and cluster-scoped resources
 - **Built-in caching** for improved performance on reads
@@ -260,7 +260,7 @@ Integration tests use **Testcontainers** with K3s for real Kubernetes cluster te
 - Fresh cluster for each test suite
 - Real networking and CRD support
 
-See `test/integration/k8s-client/` for integration test examples and setup guide.
+See `test/integration/k8s_client/` for integration test examples and setup guide.
 
 ## Best Practices
 

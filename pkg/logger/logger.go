@@ -136,6 +136,11 @@ func (l *logger) log(message string, glogFunc func(args ...interface{})) {
 	glogFunc(prefixed)
 }
 
+// Flush flushes all pending log I/O
+func Flush() {
+	glog.Flush()
+}
+
 // contextKey is a custom type for context keys to avoid collisions
 type contextKey string
 

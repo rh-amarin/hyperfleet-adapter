@@ -1,14 +1,13 @@
-//go:build integration
-// +build integration
+// This file contains integration tests for the K8s client.
 
-package k8sclient_integration
+package k8s_client_integration
 
 import (
 	"strings"
 	"testing"
 	"time"
 
-	k8sclient "github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s-client"
+	k8s_client "github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -43,12 +42,12 @@ func TestIntegration_CreateResource(t *testing.T) {
 					"name": "test-namespace-" + time.Now().Format("20060102150405"),
 					"labels": map[string]interface{}{
 						"test": "integration",
-						"app":  "k8s-client",
+						"app":  "k8s_client",
 					},
 				},
 			},
 		}
-		ns.SetGroupVersionKind(k8sclient.CommonResourceKinds.Namespace)
+		ns.SetGroupVersionKind(k8s_client.CommonResourceKinds.Namespace)
 
 		// Create the namespace
 		created, err := env.GetClient().CreateResource(env.GetContext(), ns)
@@ -62,7 +61,7 @@ func TestIntegration_CreateResource(t *testing.T) {
 		// Verify labels
 		labels := created.GetLabels()
 		assert.Equal(t, "integration", labels["test"])
-		assert.Equal(t, "k8s-client", labels["app"])
+		assert.Equal(t, "k8s_client", labels["app"])
 	})
 
 	t.Run("create configmap", func(t *testing.T) {
@@ -82,7 +81,7 @@ func TestIntegration_CreateResource(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -112,13 +111,13 @@ func TestIntegration_GetResource(t *testing.T) {
 				},
 			},
 		}
-		ns.SetGroupVersionKind(k8sclient.CommonResourceKinds.Namespace)
+		ns.SetGroupVersionKind(k8s_client.CommonResourceKinds.Namespace)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), ns)
 		require.NoError(t, err)
 
 		// Get the namespace
-		retrieved, err := env.GetClient().GetResource(env.GetContext(), k8sclient.CommonResourceKinds.Namespace, "", nsName)
+		retrieved, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.Namespace, "", nsName)
 		require.NoError(t, err)
 		require.NotNil(t, retrieved)
 
@@ -127,7 +126,7 @@ func TestIntegration_GetResource(t *testing.T) {
 	})
 
 	t.Run("get non-existent resource returns error", func(t *testing.T) {
-		_, err := env.GetClient().GetResource(env.GetContext(), k8sclient.CommonResourceKinds.Namespace, "", "non-existent-namespace-12345")
+		_, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.Namespace, "", "non-existent-namespace-12345")
 		require.Error(t, err)
 	})
 }
@@ -159,7 +158,7 @@ func TestIntegration_ListResources(t *testing.T) {
 					},
 				},
 			}
-			cm.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+			cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 			_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 			require.NoError(t, err)
@@ -167,7 +166,7 @@ func TestIntegration_ListResources(t *testing.T) {
 
 		// List configmaps with label selector
 		selector := "test-group=" + timestamp
-		list, err := env.GetClient().ListResources(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", selector)
+		list, err := env.GetClient().ListResources(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", selector)
 		require.NoError(t, err)
 		require.NotNil(t, list)
 
@@ -198,7 +197,7 @@ func TestIntegration_UpdateResource(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -240,22 +239,22 @@ func TestIntegration_DeleteResource(t *testing.T) {
 				},
 			},
 		}
-		ns.SetGroupVersionKind(k8sclient.CommonResourceKinds.Namespace)
+		ns.SetGroupVersionKind(k8s_client.CommonResourceKinds.Namespace)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), ns)
 		require.NoError(t, err)
 
 		// Verify it exists
-		_, err = env.GetClient().GetResource(env.GetContext(), k8sclient.CommonResourceKinds.Namespace, "", nsName)
+		_, err = env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.Namespace, "", nsName)
 		require.NoError(t, err)
 
 		// Delete the namespace
-		err = env.GetClient().DeleteResource(env.GetContext(), k8sclient.CommonResourceKinds.Namespace, "", nsName)
+		err = env.GetClient().DeleteResource(env.GetContext(), k8s_client.CommonResourceKinds.Namespace, "", nsName)
 		require.NoError(t, err)
 
 		// Verify it's being deleted (namespaces go into Terminating phase)
 		time.Sleep(100 * time.Millisecond)
-		deletedNs, err := env.GetClient().GetResource(env.GetContext(), k8sclient.CommonResourceKinds.Namespace, "", nsName)
+		deletedNs, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.Namespace, "", nsName)
 		if err == nil {
 			// Namespace still exists, should have deletionTimestamp set (Terminating state)
 			deletionTimestamp := deletedNs.GetDeletionTimestamp()
@@ -292,14 +291,14 @@ func TestIntegration_ResourceLifecycle(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
 		assert.Equal(t, cmName, created.GetName())
 
 		// 2. Get and verify
-		retrieved, err := env.GetClient().GetResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", cmName)
+		retrieved, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
 		require.NoError(t, err)
 		data, _, _ := unstructured.NestedString(retrieved.Object, "data", "stage")
 		assert.Equal(t, "created", data)
@@ -313,17 +312,17 @@ func TestIntegration_ResourceLifecycle(t *testing.T) {
 		assert.Equal(t, "updated", data)
 
 		// 4. Get and verify update
-		retrieved2, err := env.GetClient().GetResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", cmName)
+		retrieved2, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
 		require.NoError(t, err)
 		data, _, _ = unstructured.NestedString(retrieved2.Object, "data", "stage")
 		assert.Equal(t, "updated", data)
 
 		// 5. Delete
-		err = env.GetClient().DeleteResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", cmName)
+		err = env.GetClient().DeleteResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
 		require.NoError(t, err)
 
 		// 6. Verify deletion
-		_, err = env.GetClient().GetResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", cmName)
+		_, err = env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
 		assert.Error(t, err)
 	})
 }
@@ -353,7 +352,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -371,7 +370,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 			}
 		}`)
 
-		patched, err := env.GetClient().PatchResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", cmName, patchData)
+		patched, err := env.GetClient().PatchResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName, patchData)
 		require.NoError(t, err)
 		require.NotNil(t, patched)
 
@@ -406,7 +405,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -418,7 +417,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 			}
 		}`)
 
-		patched, err := env.GetClient().PatchResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", cmName, patchData)
+		patched, err := env.GetClient().PatchResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName, patchData)
 		require.NoError(t, err)
 
 		data, _, _ := unstructured.NestedStringMap(patched.Object, "data")
@@ -428,7 +427,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 
 	t.Run("patch non-existent resource returns error", func(t *testing.T) {
 		patchData := []byte(`{"data": {"key": "value"}}`)
-		_, err := env.GetClient().PatchResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", "non-existent-cm-12345", patchData)
+		_, err := env.GetClient().PatchResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", "non-existent-cm-12345", patchData)
 		require.Error(t, err)
 		assert.True(t, k8serrors.IsNotFound(err), "Should return NotFound error")
 	})
@@ -447,14 +446,14 @@ func TestIntegration_PatchResource(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
 
 		// Try to patch with invalid JSON
 		invalidPatchData := []byte(`{invalid json}`)
-		_, err = env.GetClient().PatchResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", cmName, invalidPatchData)
+		_, err = env.GetClient().PatchResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName, invalidPatchData)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid patch data", "Should return invalid patch data error")
 	})
@@ -479,7 +478,7 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -495,7 +494,7 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 				},
 			},
 		}
-		cm2.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+		cm2.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 		_, err = env.GetClient().CreateResource(env.GetContext(), cm2)
 		require.Error(t, err)
@@ -506,12 +505,12 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 		// Invalid selector syntax - use an actually invalid one that will fail parsing
 		// controller-runtime is lenient with some selectors, so use one that's truly invalid
 		invalidSelector := "app===invalid"
-		_, err := env.GetClient().ListResources(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", invalidSelector)
+		_, err := env.GetClient().ListResources(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", invalidSelector)
 		require.Error(t, err)
 	})
 
 	t.Run("get with empty name returns error", func(t *testing.T) {
-		_, err := env.GetClient().GetResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", "")
+		_, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", "")
 		require.Error(t, err)
 	})
 
@@ -529,16 +528,16 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
 
-		err = env.GetClient().DeleteResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", cmName)
+		err = env.GetClient().DeleteResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
 		require.NoError(t, err)
 
 		// Try to delete again - should succeed (idempotent)
-		err = env.GetClient().DeleteResource(env.GetContext(), k8sclient.CommonResourceKinds.ConfigMap, "default", cmName)
+		err = env.GetClient().DeleteResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
 		require.NoError(t, err, "Deleting already deleted resource should succeed")
 	})
 
@@ -559,7 +558,7 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8sclient.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -611,7 +610,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 				},
 			},
 		}
-		svc.SetGroupVersionKind(k8sclient.CommonResourceKinds.Service)
+		svc.SetGroupVersionKind(k8s_client.CommonResourceKinds.Service)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), svc)
 		require.NoError(t, err)
@@ -621,7 +620,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 		assert.Equal(t, svcName, created.GetName())
 
 		// Get the service
-		retrieved, err := env.GetClient().GetResource(env.GetContext(), k8sclient.CommonResourceKinds.Service, "default", svcName)
+		retrieved, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.Service, "default", svcName)
 		require.NoError(t, err)
 		assert.Equal(t, svcName, retrieved.GetName())
 	})
@@ -680,7 +679,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 					},
 				},
 			}
-			pod.SetGroupVersionKind(k8sclient.CommonResourceKinds.Pod)
+			pod.SetGroupVersionKind(k8s_client.CommonResourceKinds.Pod)
 
 			_, err := env.GetClient().CreateResource(env.GetContext(), pod)
 			require.NoError(t, err)
@@ -688,7 +687,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 
 		// List pods with label selector
 		selector := "test-group=" + timestamp
-		list, err := env.GetClient().ListResources(env.GetContext(), k8sclient.CommonResourceKinds.Pod, "default", selector)
+		list, err := env.GetClient().ListResources(env.GetContext(), k8s_client.CommonResourceKinds.Pod, "default", selector)
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(list.Items), 2, "Should find at least 2 pods")
 	})
@@ -711,7 +710,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 				},
 			},
 		}
-		secret.SetGroupVersionKind(k8sclient.CommonResourceKinds.Secret)
+		secret.SetGroupVersionKind(k8s_client.CommonResourceKinds.Secret)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), secret)
 		require.NoError(t, err)

@@ -1,7 +1,6 @@
-//go:build integration
-// +build integration
+// This file contains helper functions for setting up a pre-built image integration test environment.
 
-package k8sclient_integration
+package k8s_client_integration
 
 import (
 	"context"
@@ -10,33 +9,38 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"k8s.io/client-go/rest"
 
-	k8sclient "github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s-client"
+	k8s_client "github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/test/integration/testutil"
+)
+
+const (
+	// EnvtestAPIServerPort is the port the kube-apiserver listens on
+	EnvtestAPIServerPort = "6443/tcp"
+
+	// EnvtestReadyLog is the log message indicating envtest is ready
+	EnvtestReadyLog = "Envtest is running"
 )
 
 // TestEnvPrebuilt holds the test environment for pre-built image integration tests
 type TestEnvPrebuilt struct {
 	Container testcontainers.Container
-	Client    *k8sclient.Client
+	Client    *k8s_client.Client
 	Config    *rest.Config
 	Ctx       context.Context
 	Log       logger.Logger
 }
 
 // Cleanup terminates the container and cleans up resources
+// Note: This is now a no-op as cleanup is handled by t.Cleanup() in testutil.StartContainer
 func (e *TestEnvPrebuilt) Cleanup(t *testing.T) {
 	t.Helper()
-	if e.Container != nil {
-		if err := e.Container.Terminate(e.Ctx); err != nil {
-			t.Logf("Warning: Failed to terminate container: %v", err)
-		}
-	}
+	// No-op: cleanup is now handled by t.Cleanup() in testutil.StartContainer
 }
 
 // SetupTestEnvPrebuilt sets up integration tests using a pre-built image with envtest.
@@ -44,7 +48,8 @@ func (e *TestEnvPrebuilt) Cleanup(t *testing.T) {
 //
 // IMPORTANT: INTEGRATION_ENVTEST_IMAGE environment variable must be set.
 // Do not call this function directly. Instead, use:
-//   make test-integration
+//
+//	make test-integration
 //
 // The Makefile will automatically:
 // - Build the image if needed (using test/Dockerfile.integration)
@@ -52,7 +57,8 @@ func (e *TestEnvPrebuilt) Cleanup(t *testing.T) {
 // - Run the integration tests
 //
 // For CI/CD, set INTEGRATION_ENVTEST_IMAGE to your pre-built image:
-//   INTEGRATION_ENVTEST_IMAGE=quay.io/your-org/integration-test:v1 make test-integration
+//
+//	INTEGRATION_ENVTEST_IMAGE=quay.io/your-org/integration-test:v1 make test-integration
 func SetupTestEnvPrebuilt(t *testing.T) *TestEnvPrebuilt {
 	t.Helper()
 
@@ -74,10 +80,6 @@ For CI/CD environments, set INTEGRATION_ENVTEST_IMAGE to your pre-built image:
 	}
 	log.Infof("Using integration image: %s", imageName)
 
-	// Create container with timeout
-	containerCtx, containerCancel := context.WithTimeout(ctx, 3*time.Minute)
-	defer containerCancel()
-
 	// Configure proxy settings from environment
 	httpProxy := os.Getenv("HTTP_PROXY")
 	httpsProxy := os.Getenv("HTTPS_PROXY")
@@ -90,59 +92,44 @@ For CI/CD environments, set INTEGRATION_ENVTEST_IMAGE to your pre-built image:
 		log.Infof("Configuring HTTPS_PROXY: %s", httpsProxy)
 	}
 
-	// Container request with pre-built image
-	req := testcontainers.ContainerRequest{
-		Image:        imageName,
-		ExposedPorts: []string{"6443/tcp"},
-		Env: map[string]string{
-			"HTTP_PROXY":  httpProxy,
-			"HTTPS_PROXY": httpsProxy,
-			"NO_PROXY":    noProxy,
-		},
-		// Reserve memory for kube-apiserver (needs ~300MB minimum)
-		HostConfigModifier: func(hc *container.HostConfig) {
-			hc.Memory = 512 * 1024 * 1024        // 512MB memory limit
-			hc.MemoryReservation = 256 * 1024 * 1024  // 256MB soft limit
-		},
-		// Use TCP wait + log-based wait since health endpoints require auth
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("6443/tcp"),
-			wait.ForLog("Envtest is running"),
-		).WithStartupTimeout(90 * time.Second),
+	// Configure container using shared utility
+	config := testutil.DefaultContainerConfig()
+	config.Name = "envtest"
+	config.Image = imageName
+	config.ExposedPorts = []string{EnvtestAPIServerPort}
+	config.Env = map[string]string{
+		"HTTP_PROXY":  httpProxy,
+		"HTTPS_PROXY": httpsProxy,
+		"NO_PROXY":    noProxy,
 	}
+	config.MaxRetries = 3
+	config.StartupTimeout = 3 * time.Minute
+	// Use TCP wait + log-based wait since health endpoints require auth
+	config.WaitStrategy = wait.ForAll(
+		wait.ForListeningPort(EnvtestAPIServerPort).WithPollInterval(500 * time.Millisecond),
+		wait.ForLog(EnvtestReadyLog).WithPollInterval(500 * time.Millisecond),
+	).WithDeadline(120 * time.Second)
 
 	log.Infof("Creating container from image: %s", imageName)
 	log.Infof("This should be fast since binaries are pre-installed...")
 
-	container, err := testcontainers.GenericContainer(containerCtx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
+	result, err := testutil.StartContainer(t, config)
 	if err != nil {
-		if containerCtx.Err() == context.DeadlineExceeded {
-			t.Fatalf(`Container creation timed out after 3 minutes.
+		t.Fatalf(`Failed to start container: %v
 
 Image: %s
 
 Possible causes:
 1. Image pull is stuck (check network/proxy configuration)
 2. Container runtime is slow or unresponsive
-3. Image does not exist (ensure 'make test-integration' was used)`, imageName)
-		}
-		t.Fatalf("Failed to start container: %v", err)
+3. Image does not exist (ensure 'make test-integration' was used)`, err, imageName)
 	}
-	require.NotNil(t, container, "Container is nil")
+	require.NotNil(t, result.Container, "Container is nil")
 
 	log.Infof("Container started successfully")
 
-	// Get the mapped port for kube-apiserver
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := container.MappedPort(ctx, "6443/tcp")
-	require.NoError(t, err)
-
-	kubeAPIServer := fmt.Sprintf("https://%s:%s", host, port.Port())
+	// Get the kube-apiserver endpoint
+	kubeAPIServer := fmt.Sprintf("https://%s", result.GetEndpoint(EnvtestAPIServerPort))
 	log.Infof("Kube-apiserver available at: %s", kubeAPIServer)
 
 	// Give API server a moment to fully initialize
@@ -150,11 +137,11 @@ Possible causes:
 	time.Sleep(5 * time.Second)
 	log.Infof("API server is ready!")
 
-	// Create Kubernetes client using the k8s-client package
+	// Create Kubernetes client using the k8s_client package
 	log.Infof("Creating Kubernetes client...")
 
 	// Create rest.Config for the client with bearer token authentication
-	config := &rest.Config{
+	restConfig := &rest.Config{
 		Host:        kubeAPIServer,
 		BearerToken: "test-token", // Matches token in /tmp/envtest/certs/token-auth-file
 		TLSClientConfig: rest.TLSClientConfig{
@@ -163,16 +150,21 @@ Possible causes:
 	}
 
 	// Create client using the config
-	client, err := k8sclient.NewClientFromConfig(ctx, config, log)
+	client, err := k8s_client.NewClientFromConfig(ctx, restConfig, log)
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
 	log.Infof("Kubernetes client created successfully")
 
+	// Create default namespace (envtest doesn't create it automatically)
+	log.Infof("Creating default namespace...")
+	createDefaultNamespace(t, client, ctx)
+	log.Infof("Default namespace ready")
+
 	return &TestEnvPrebuilt{
-		Container: container,
+		Container: result.Container,
 		Client:    client,
-		Config:    config,
+		Config:    restConfig,
 		Ctx:       ctx,
 		Log:       log,
 	}

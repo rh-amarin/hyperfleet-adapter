@@ -32,7 +32,7 @@ RUN openssl genrsa -out /tmp/envtest/certs/sa.key 2048 && \
 RUN echo "test-token,test-user,test-uid,system:masters" > /tmp/envtest/certs/token-auth-file
 
 # Copy startup script to launch etcd and kube-apiserver
-COPY test/start-envtest.sh /usr/local/bin/start-envtest.sh
+COPY scripts/start-envtest.sh /usr/local/bin/start-envtest.sh
 RUN chmod +x /usr/local/bin/start-envtest.sh
 
 # Default command: start envtest

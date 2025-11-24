@@ -202,7 +202,7 @@ spec:
               hyperfleet.io/resource-type: "service"
               hyperfleet.io/managed-by: "{{ .metadata.name }}"
 
-  # post: both conditions and data to the enpoint defined. data is optional, if not defined, the adapter will not report data to hyperfleet-api
+  # post: both conditions and data to the enpoint defined. data is optional, if not defined, the adapter will not report data to hyperfleet_api
   # Define conditions to report based on tracked resource status fields
   # multiple post conditions can be defined and they will be reported in the order they are defined 
 # ... (inside spec:) ...
