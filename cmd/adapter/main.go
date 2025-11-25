@@ -12,6 +12,8 @@ import (
 
 	"github.com/cloudevents/sdk-go/v2/event"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/broker_consumer"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/config_loader"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 )
 
@@ -25,7 +27,13 @@ var (
 
 const shutdownTimeout = 30 * time.Second
 
+// Command-line flags
+var configPath string
+
 func main() {
+	// Define flags
+	flag.StringVar(&configPath, "config", "", fmt.Sprintf("Path to adapter configuration file (can also use %s env var)", config_loader.EnvConfigPath))
+
 	// Initialize glog flags
 	flag.Parse()
 
@@ -50,6 +58,29 @@ func run() error {
 	log := logger.NewLogger(ctx)
 
 	log.Infof("Starting Hyperfleet Adapter version=%s commit=%s built=%s tag=%s", version, commit, buildDate, tag)
+
+	// Load adapter configuration
+	// If configPath flag is empty, config_loader.Load will read from ADAPTER_CONFIG_PATH env var
+	log.Info("Loading adapter configuration...")
+	adapterConfig, err := config_loader.Load(configPath, config_loader.WithAdapterVersion(version))
+	if err != nil {
+		log.Error(fmt.Sprintf("Failed to load adapter configuration: %v", err))
+		return fmt.Errorf("failed to load adapter configuration: %w", err)
+	}
+	log.Infof("Adapter configuration loaded successfully: name=%s namespace=%s",
+		adapterConfig.Metadata.Name, adapterConfig.Metadata.Namespace)
+
+	// Create HyperFleet API client from config
+	// The client is stateless and safe to reuse across messages.
+	// Each API call receives the message-specific context for proper isolation.
+	apiClient, err := createAPIClient(adapterConfig.Spec.HyperfleetAPI)
+	if err != nil {
+		log.Error(fmt.Sprintf("Failed to create HyperFleet API client: %v", err))
+		return fmt.Errorf("failed to create HyperFleet API client: %w", err)
+	}
+	log.Infof("HyperFleet API client created: baseURL=%s timeout=%s retryAttempts=%d",
+		apiClient.BaseURL(), adapterConfig.Spec.HyperfleetAPI.Timeout, adapterConfig.Spec.HyperfleetAPI.RetryAttempts)
+
 
 	// Handle signals for graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -98,11 +129,33 @@ func run() error {
 		}
 	}()
 
-	// Define event handler
+	// Define event handler using the loaded adapter configuration and API client.
+	// Each message invocation receives its own context (ctx) from the broker.
+	// This ensures message isolation - cancellation or timeout of one message
+	// does not affect other messages.
 	handler := func(ctx context.Context, evt *event.Event) error {
-		log.Infof("Received event: id=%s type=%s source=%s data=%s", evt.ID(), evt.Type(), evt.Source(), string(evt.Data()))
+		// Safely render event data with nil check
+		dataStr := ""
+		if evt.Data() != nil {
+			dataStr = string(evt.Data())
+		}
+		log.Infof("Received event: id=%s type=%s source=%s data=%s", evt.ID(), evt.Type(), evt.Source(), dataStr)
 
-		// TODO: Add your event processing logic here
+		// TODO: Process event using adapterConfig and apiClient
+		// Each API call MUST use ctx (the message context) for proper isolation:
+		//   resp, err := apiClient.Get(ctx, url)  // ctx ensures per-message timeout/cancellation
+		//
+		// 1. Extract params from event data using adapterConfig.Spec.Params
+		// 2. Execute preconditions using adapterConfig.Spec.Preconditions
+		//    - Make API calls using apiClient.Get(ctx, ...)/Post(ctx, ...)/etc.
+		//    - Extract response fields and evaluate conditions
+		// 3. Create/update Kubernetes resources using adapterConfig.Spec.Resources
+		// 4. Execute post actions using adapterConfig.Spec.Post.PostActions
+		//    - Report status back to HyperFleet API using apiClient
+
+		// Reference config and client to avoid unused variable warnings
+		_ = adapterConfig
+		_ = apiClient
 
 		log.Info("Event processed successfully")
 		return nil
@@ -129,4 +182,46 @@ func run() error {
 	log.Info("Adapter shutdown complete")
 
 	return nil
+}
+
+// createAPIClient creates a HyperFleet API client from the config.
+// Base URL resolution: config value takes precedence; if not configured,
+// NewClient falls back to HYPERFLEET_API_BASE_URL env var as a last resort.
+func createAPIClient(apiConfig config_loader.HyperfleetAPIConfig) (hyperfleet_api.Client, error) {
+	var opts []hyperfleet_api.ClientOption
+
+	// Set base URL from config if explicitly configured.
+	// If not set here, NewClient will fall back to HYPERFLEET_API_BASE_URL env var.
+	if baseURL := apiConfig.GetBaseURL(); baseURL != "" {
+		opts = append(opts, hyperfleet_api.WithBaseURL(baseURL))
+	}
+
+	// Parse and set timeout using the accessor method
+	timeout, err := apiConfig.ParseTimeout()
+	if err != nil {
+		return nil, fmt.Errorf("invalid timeout %q: %w", apiConfig.Timeout, err)
+	}
+	if timeout > 0 {
+		opts = append(opts, hyperfleet_api.WithTimeout(timeout))
+	}
+
+	// Set retry attempts
+	if apiConfig.RetryAttempts > 0 {
+		opts = append(opts, hyperfleet_api.WithRetryAttempts(apiConfig.RetryAttempts))
+	}
+
+	// Parse and set retry backoff strategy
+	if apiConfig.RetryBackoff != "" {
+		backoff := hyperfleet_api.BackoffStrategy(apiConfig.RetryBackoff)
+		switch backoff {
+		case hyperfleet_api.BackoffExponential, hyperfleet_api.BackoffLinear, hyperfleet_api.BackoffConstant:
+			opts = append(opts, hyperfleet_api.WithRetryBackoff(backoff))
+		default:
+			return nil, fmt.Errorf("invalid retry backoff strategy %q (supported: exponential, linear, constant)", apiConfig.RetryBackoff)
+		}
+	}
+
+	// NewClient validates base URL is configured.
+	// It reads HYPERFLEET_API_BASE_URL env var as last resort if not set via options.
+	return hyperfleet_api.NewClient(opts...)
 }

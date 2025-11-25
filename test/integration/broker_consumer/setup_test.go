@@ -97,19 +97,10 @@ broker:
 		t.Fatalf("Failed to close config file: %v", err)
 	}
 
-	// Configure environment
-	if err := os.Setenv("BROKER_CONFIG_FILE", configFile.Name()); err != nil {
-		cleanup() // Clean up config file
-		t.Fatalf("Failed to set BROKER_CONFIG_FILE: %v", err)
-	}
-	if err := os.Setenv("PUBSUB_EMULATOR_HOST", emulatorHost); err != nil {
-		cleanup() // Clean up config file
-		t.Fatalf("Failed to set PUBSUB_EMULATOR_HOST: %v", err)
-	}
-	if err := os.Setenv("BROKER_GOOGLEPUBSUB_PROJECT_ID", projectID); err != nil {
-		cleanup() // Clean up config file
-		t.Fatalf("Failed to set BROKER_GOOGLEPUBSUB_PROJECT_ID: %v", err)
-	}
+	// Configure environment using t.Setenv which automatically restores original values on test cleanup
+	t.Setenv("BROKER_CONFIG_FILE", configFile.Name())
+	t.Setenv("PUBSUB_EMULATOR_HOST", emulatorHost)
+	t.Setenv("BROKER_GOOGLEPUBSUB_PROJECT_ID", projectID)
 
 	return configFile.Name(), cleanup
 }

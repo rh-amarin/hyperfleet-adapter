@@ -25,6 +25,7 @@ NO_PROXY="*" /usr/local/bin/kube-apiserver \
   --token-auth-file=/tmp/envtest/certs/token-auth-file \
   --disable-admission-plugins=ServiceAccount \
   --authorization-mode=AlwaysAllow \
+  --anonymous-auth=true \
   --allow-privileged=true \
   --max-requests-inflight=200 \
   --max-mutating-requests-inflight=100 \

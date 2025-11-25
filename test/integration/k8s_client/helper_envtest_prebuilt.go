@@ -4,14 +4,17 @@ package k8s_client_integration
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 
 	k8s_client "github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
@@ -27,6 +30,52 @@ const (
 	EnvtestReadyLog = "Envtest is running"
 )
 
+// EnvtestBearerToken is the token used for authenticating with the envtest API server
+const EnvtestBearerToken = "test-token"
+
+// waitForAPIServerReady polls the API server's health endpoint until it returns 200
+// or the timeout is reached. It uses short backoff retries with TLS verification disabled.
+func waitForAPIServerReady(kubeAPIServer string, timeout time.Duration) error {
+	// Create HTTP client with TLS verification disabled (for self-signed certs)
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // Required for envtest self-signed certs
+			},
+		},
+	}
+
+	healthURL := kubeAPIServer + "/healthz"
+	deadline := time.Now().Add(timeout)
+	backoff := 500 * time.Millisecond
+
+	for {
+		req, err := http.NewRequest(http.MethodGet, healthURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+EnvtestBearerToken)
+
+		resp, err := client.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+
+		if time.Now().After(deadline) {
+			if err != nil {
+				return fmt.Errorf("API server not ready after %v: last error: %w", timeout, err)
+			}
+			return fmt.Errorf("API server not ready after %v: last status code: %d", timeout, resp.StatusCode)
+		}
+
+		time.Sleep(backoff)
+	}
+}
+
 // TestEnvPrebuilt holds the test environment for pre-built image integration tests
 type TestEnvPrebuilt struct {
 	Container testcontainers.Container
@@ -36,137 +85,127 @@ type TestEnvPrebuilt struct {
 	Log       logger.Logger
 }
 
-// Cleanup terminates the container and cleans up resources
-// Note: This is now a no-op as cleanup is handled by t.Cleanup() in testutil.StartContainer
+// Cleanup terminates the container (no-op for shared containers, use CleanupSharedEnv)
 func (e *TestEnvPrebuilt) Cleanup(t *testing.T) {
 	t.Helper()
-	// No-op: cleanup is now handled by t.Cleanup() in testutil.StartContainer
+	// No-op for shared containers - cleanup is handled by TestMain via CleanupSharedEnv
 }
 
-// SetupTestEnvPrebuilt sets up integration tests using a pre-built image with envtest.
-// This approach avoids Exec() calls and works reliably with both Docker and Podman.
-//
-// IMPORTANT: INTEGRATION_ENVTEST_IMAGE environment variable must be set.
-// Do not call this function directly. Instead, use:
-//
-//	make test-integration
-//
-// The Makefile will automatically:
-// - Build the image if needed (using test/Dockerfile.integration)
-// - Set INTEGRATION_ENVTEST_IMAGE to the appropriate value
-// - Run the integration tests
-//
-// For CI/CD, set INTEGRATION_ENVTEST_IMAGE to your pre-built image:
-//
-//	INTEGRATION_ENVTEST_IMAGE=quay.io/your-org/integration-test:v1 make test-integration
-func SetupTestEnvPrebuilt(t *testing.T) *TestEnvPrebuilt {
-	t.Helper()
-
+// setupSharedTestEnv creates a shared test environment for use across all tests.
+// This is called from TestMain and doesn't require a *testing.T.
+// It uses testutil.StartSharedContainer for container lifecycle management.
+// Returns an error instead of panicking to allow graceful handling.
+func setupSharedTestEnv() (*TestEnvPrebuilt, error) {
 	ctx := context.Background()
 	log := logger.NewLogger(ctx)
 
 	// Check that INTEGRATION_ENVTEST_IMAGE is set
 	imageName := os.Getenv("INTEGRATION_ENVTEST_IMAGE")
 	if imageName == "" {
-		t.Fatalf(`INTEGRATION_ENVTEST_IMAGE environment variable is not set.
-
-Please run integration tests using:
-  make test-integration
-
-The Makefile will automatically build the image if needed and set INTEGRATION_ENVTEST_IMAGE.
-
-For CI/CD environments, set INTEGRATION_ENVTEST_IMAGE to your pre-built image:
-  INTEGRATION_ENVTEST_IMAGE=quay.io/your-org/integration-test:v1 make test-integration`)
+		return nil, fmt.Errorf("INTEGRATION_ENVTEST_IMAGE environment variable is not set")
 	}
-	log.Infof("Using integration image: %s", imageName)
 
 	// Configure proxy settings from environment
 	httpProxy := os.Getenv("HTTP_PROXY")
 	httpsProxy := os.Getenv("HTTPS_PROXY")
 	noProxy := os.Getenv("NO_PROXY")
 
-	if httpProxy != "" {
-		log.Infof("Configuring HTTP_PROXY: %s", httpProxy)
-	}
-	if httpsProxy != "" {
-		log.Infof("Configuring HTTPS_PROXY: %s", httpsProxy)
+	// Use testutil.StartSharedContainer for container lifecycle
+	config := testutil.ContainerConfig{
+		Name:         "envtest",
+		Image:        imageName,
+		ExposedPorts: []string{EnvtestAPIServerPort},
+		Env: map[string]string{
+			"HTTP_PROXY":  httpProxy,
+			"HTTPS_PROXY": httpsProxy,
+			"NO_PROXY":    noProxy,
+		},
+		WaitStrategy: wait.ForAll(
+			wait.ForListeningPort(EnvtestAPIServerPort).WithPollInterval(500 * time.Millisecond),
+			wait.ForLog(EnvtestReadyLog).WithPollInterval(500 * time.Millisecond),
+		).WithDeadline(120 * time.Second),
+		MaxRetries:     3,
+		StartupTimeout: 3 * time.Minute,
 	}
 
-	// Configure container using shared utility
-	config := testutil.DefaultContainerConfig()
-	config.Name = "envtest"
-	config.Image = imageName
-	config.ExposedPorts = []string{EnvtestAPIServerPort}
-	config.Env = map[string]string{
-		"HTTP_PROXY":  httpProxy,
-		"HTTPS_PROXY": httpsProxy,
-		"NO_PROXY":    noProxy,
-	}
-	config.MaxRetries = 3
-	config.StartupTimeout = 3 * time.Minute
-	// Use TCP wait + log-based wait since health endpoints require auth
-	config.WaitStrategy = wait.ForAll(
-		wait.ForListeningPort(EnvtestAPIServerPort).WithPollInterval(500 * time.Millisecond),
-		wait.ForLog(EnvtestReadyLog).WithPollInterval(500 * time.Millisecond),
-	).WithDeadline(120 * time.Second)
-
-	log.Infof("Creating container from image: %s", imageName)
-	log.Infof("This should be fast since binaries are pre-installed...")
-
-	result, err := testutil.StartContainer(t, config)
+	sharedContainer, err := testutil.StartSharedContainer(config)
 	if err != nil {
-		t.Fatalf(`Failed to start container: %v
-
-Image: %s
-
-Possible causes:
-1. Image pull is stuck (check network/proxy configuration)
-2. Container runtime is slow or unresponsive
-3. Image does not exist (ensure 'make test-integration' was used)`, err, imageName)
+		return nil, fmt.Errorf("failed to start envtest container: %w", err)
 	}
-	require.NotNil(t, result.Container, "Container is nil")
-
-	log.Infof("Container started successfully")
 
 	// Get the kube-apiserver endpoint
-	kubeAPIServer := fmt.Sprintf("https://%s", result.GetEndpoint(EnvtestAPIServerPort))
-	log.Infof("Kube-apiserver available at: %s", kubeAPIServer)
+	kubeAPIServer := fmt.Sprintf("https://%s", sharedContainer.GetEndpoint(EnvtestAPIServerPort))
+	println(fmt.Sprintf("   Kube-apiserver available at: %s", kubeAPIServer))
 
-	// Give API server a moment to fully initialize
-	log.Infof("Waiting for API server to be fully ready...")
-	time.Sleep(5 * time.Second)
-	log.Infof("API server is ready!")
+	// Wait for API server to be fully ready with auth
+	println("   Waiting for API server to be fully ready...")
+	if err := waitForAPIServerReady(kubeAPIServer, 30*time.Second); err != nil {
+		sharedContainer.Cleanup()
+		return nil, fmt.Errorf("API server failed to become ready: %w", err)
+	}
+	println("   ✅ API server is ready!")
 
-	// Create Kubernetes client using the k8s_client package
-	log.Infof("Creating Kubernetes client...")
-
-	// Create rest.Config for the client with bearer token authentication
+	// Create rest.Config for the client
 	restConfig := &rest.Config{
 		Host:        kubeAPIServer,
-		BearerToken: "test-token", // Matches token in /tmp/envtest/certs/token-auth-file
+		BearerToken: EnvtestBearerToken,
 		TLSClientConfig: rest.TLSClientConfig{
-			Insecure: true, // Skip TLS verification for testing
+			Insecure: true,
 		},
 	}
 
-	// Create client using the config
+	// Create client
 	client, err := k8s_client.NewClientFromConfig(ctx, restConfig, log)
-	require.NoError(t, err)
-	require.NotNil(t, client)
+	if err != nil {
+		sharedContainer.Cleanup()
+		return nil, fmt.Errorf("failed to create K8s client: %w", err)
+	}
 
-	log.Infof("Kubernetes client created successfully")
-
-	// Create default namespace (envtest doesn't create it automatically)
-	log.Infof("Creating default namespace...")
-	createDefaultNamespace(t, client, ctx)
-	log.Infof("Default namespace ready")
+	// Create default namespace
+	println("   Creating default namespace...")
+	if err := createDefaultNamespaceNoTest(client, ctx); err != nil {
+		println(fmt.Sprintf("   Warning: Could not create default namespace: %v", err))
+	}
 
 	return &TestEnvPrebuilt{
-		Container: result.Container,
+		Container: sharedContainer.Container,
 		Client:    client,
 		Config:    restConfig,
 		Ctx:       ctx,
 		Log:       log,
+	}, nil
+}
+
+// CleanupSharedEnv terminates the shared container
+func (e *TestEnvPrebuilt) CleanupSharedEnv() {
+	if e == nil || e.Container == nil {
+		return
 	}
+	shared := &testutil.SharedContainer{
+		Container: e.Container,
+		Name:      "envtest",
+	}
+	shared.Cleanup()
+}
+
+// createDefaultNamespaceNoTest creates the default namespace without requiring *testing.T
+func createDefaultNamespaceNoTest(client *k8s_client.Client, ctx context.Context) error {
+	ns := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Namespace",
+			"metadata": map[string]interface{}{
+				"name": "default",
+			},
+		},
+	}
+	ns.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Namespace"})
+
+	_, err := client.CreateResource(ctx, ns)
+	// Ignore error if namespace already exists
+	if err != nil && !isAlreadyExistsError(err) {
+		return err
+	}
+	return nil
 }
 
