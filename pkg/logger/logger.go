@@ -23,9 +23,9 @@ var _ Logger = &logger{}
 type extra map[string]interface{}
 
 type logger struct {
-	context   context.Context
-	level     int32
-	extra     extra
+	context context.Context
+	level   int32
+	extra   extra
 }
 
 // NewLogger creates a new logger instance with a default verbosity of 1

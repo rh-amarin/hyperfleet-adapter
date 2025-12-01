@@ -1,0 +1,27 @@
+broker:
+  # Broker type: "rabbitmq" or "googlepubsub"
+  type: googlepubsub
+  
+  # Google Pub/Sub Configuration
+  googlepubsub:
+    # GCP Project ID (required for googlepubsub)
+    project_id: "hcm-hyperfleet"
+    
+    # Topic name (optional, can be specified per publish/subscribe call)
+    topic: "amarin-test-adapter"
+    
+    # Subscription name (optional, can be specified per subscribe call)
+    subscription: "amarin-test-adapter-sub"
+    
+    # Maximum outstanding messages (optional, default: 1000)
+    max_outstanding_messages: 1000
+    
+    # Number of goroutines for Pub/Sub client (optional, default: 10)
+    num_goroutines: 10
+
+# Subscriber Configuration
+subscriber:
+  # Number of parallel workers for processing messages (default: 1)
+  parallelism: 1
+
+log_config: false
