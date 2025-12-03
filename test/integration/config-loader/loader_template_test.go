@@ -1,9 +1,9 @@
 package config_loader_integration
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/config_loader"
@@ -11,30 +11,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const projectName = "hyperfleet-adapter"
-
-// getProjectRoot returns the absolute path to the project root by finding
-// the LAST occurrence of the exact project directory name in the current file's path.
-// This handles cases where the workspace path also contains the project name
-// (e.g., /workspace/hyperfleet-adapter/pr-branch/hyperfleet-adapter/...)
+// getProjectRoot traverses upwards from the directory of the current file,
+// checking each parent for a .git directory, returning the first match.
+// This approach reliably finds the project root, even if the project name is repeated in the path.
 func getProjectRoot() string {
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		panic("runtime.Caller failed")
 	}
 
-	// Match exact directory name by looking for /projectName/ or /projectName at end
-	sep := string(filepath.Separator)
-	searchPattern := sep + projectName + sep
-
-	// Find the last occurrence of the exact directory name
-	idx := strings.LastIndex(filename, searchPattern)
-	if idx == -1 {
-		panic("could not find project root: " + projectName + " not found as directory in path: " + filename)
+	dir := filepath.Dir(filename)
+	for {
+		gitDir := filepath.Join(dir, ".git")
+		if info, err := os.Stat(gitDir); err == nil && (info.IsDir() || info.Mode().IsRegular()) {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // reached root
+		}
+		dir = parent
 	}
-
-	// Return path up to and including the project directory
-	return filename[:idx+len(searchPattern)-1]
+	panic("could not find project root: no .git directory found upwards from path: " + filename)
 }
 
 // TestLoadTemplateConfig tests loading the actual adapter-config-template.yaml
@@ -158,4 +156,3 @@ func findResourceByName(resources []config_loader.Resource, name string) *config
 	}
 	return nil
 }
-
