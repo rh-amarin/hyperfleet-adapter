@@ -55,7 +55,7 @@ else ifeq ($(PODMAN_AVAILABLE),true)
     endif
 else
     CONTAINER_RUNTIME := none
-    CONTAINER_CMD := echo "No container runtime found. Please install Docker or Podman." && exit 1 &&
+    CONTAINER_CMD := sh -c 'echo "No container runtime found. Please install Docker or Podman." && exit 1'
 endif
 
 # Directories
@@ -89,13 +89,11 @@ test-coverage-html: test-coverage ## Generate HTML coverage report
 	$(GOCMD) tool cover -html=$(COVERAGE_OUT) -o $(COVERAGE_HTML)
 	@echo "HTML coverage report generated: $(COVERAGE_HTML)"
 
-.PHONY: test-integration
+.PHONY: image-integration-test
 image-integration-test: ## 🔨 Build integration test image with envtest
 	@bash scripts/build-integration-image.sh
 
-.PHONY: image-integration-test
-integration-image: image-integration-test ## 🔨 Alias for image-integration-test (deprecated, use image-integration-test)
-
+.PHONY: test-integration
 test-integration: ## 🐳 Run integration tests (requires Docker/Podman)
 	@TEST_TIMEOUT=$(TEST_TIMEOUT) bash scripts/run-integration-tests.sh
 
@@ -116,7 +114,7 @@ test-all: test test-integration lint ## ✅ Run ALL tests (unit + integration + 
 lint: ## Run golangci-lint
 	@echo "Running golangci-lint..."
 	@if command -v golangci-lint > /dev/null; then \
-		golangci-lint run; \
+		golangci-lint cache clean && golangci-lint run; \
 	else \
 		echo "Error: golangci-lint not found. Please install it:"; \
 		echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \

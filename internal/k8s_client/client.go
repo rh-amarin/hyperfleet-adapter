@@ -159,9 +159,16 @@ func (c *Client) GetResource(ctx context.Context, gvk schema.GroupVersionKind, n
 	return obj, nil
 }
 
-// ListResources lists Kubernetes resources by GVK, namespace, and label selector
+// ListResources lists Kubernetes resources by GVK, namespace, and label selector.
+//
+// Parameters:
+//   - gvk: GroupVersionKind of the resources to list
+//   - namespace: namespace to list resources in (empty string for cluster-scoped or all namespaces)
+//   - labelSelector: label selector string (e.g., "app=myapp,env=prod") - empty to skip
+//
+// For more flexible discovery (including by-name lookup), use DiscoverResources() instead.
 func (c *Client) ListResources(ctx context.Context, gvk schema.GroupVersionKind, namespace string, labelSelector string) (*unstructured.UnstructuredList, error) {
-	c.log.Infof("Listing resources: %s (namespace: %s, selector: %s)", gvk.Kind, namespace, labelSelector)
+	c.log.Infof("Listing resources: %s (namespace: %s, labelSelector: %s)", gvk.Kind, namespace, labelSelector)
 
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(gvk)
@@ -175,16 +182,16 @@ func (c *Client) ListResources(ctx context.Context, gvk schema.GroupVersionKind,
 		if err != nil {
 			return nil, errors.KubernetesError("invalid label selector %s: %v", labelSelector, err)
 		}
-		labelMap, err := metav1.LabelSelectorAsSelector(selector)
-	if err != nil {
+		parsedLabelSelector, err := metav1.LabelSelectorAsSelector(selector)
+		if err != nil {
 			return nil, errors.KubernetesError("failed to convert label selector: %v", err)
 		}
-		opts = append(opts, client.MatchingLabelsSelector{Selector: labelMap})
+		opts = append(opts, client.MatchingLabelsSelector{Selector: parsedLabelSelector})
 	}
 
 	err := c.client.List(ctx, list, opts...)
 	if err != nil {
-		return nil, errors.KubernetesError("failed to list resources %s (namespace: %s, selector: %s): %v", gvk.Kind, namespace, labelSelector, err)
+		return nil, errors.KubernetesError("failed to list resources %s (namespace: %s, labelSelector: %s): %v", gvk.Kind, namespace, labelSelector, err)
 	}
 
 	c.log.Infof("Successfully listed resources: %s (found %d items)", gvk.Kind, len(list.Items))
@@ -221,8 +228,8 @@ func (c *Client) UpdateResource(ctx context.Context, obj *unstructured.Unstructu
 	err := c.client.Update(ctx, obj)
 	if err != nil {
 		if apierrors.IsConflict(err) {
-			return nil, errors.KubernetesError("update conflict for %s/%s (namespace: %s): resource version mismatch. Get the latest version and retry", gvk.Kind, name, namespace)
-	}
+			return nil, err
+		}
 		return nil, errors.KubernetesError("failed to update resource %s/%s (namespace: %s): %v", gvk.Kind, name, namespace, err)
 	}
 
@@ -244,7 +251,7 @@ func (c *Client) DeleteResource(ctx context.Context, gvk schema.GroupVersionKind
 		if apierrors.IsNotFound(err) {
 			c.log.Infof("Resource already deleted: %s/%s", gvk.Kind, name)
 			return nil
-	}
+		}
 		return errors.KubernetesError("failed to delete resource %s/%s (namespace: %s): %v", gvk.Kind, name, namespace, err)
 	}
 
@@ -254,12 +261,12 @@ func (c *Client) DeleteResource(ctx context.Context, gvk schema.GroupVersionKind
 
 // PatchResource applies a patch to a Kubernetes resource
 //
-// This performs a strategic merge patch, updating only the specified fields
+// This performs a JSON merge patch (RFC 7386), updating only the specified fields
 // while preserving other fields. This is safer than UpdateResource for
 // concurrent modifications.
 //
 // Patch Types:
-//   - Strategic Merge Patch: Merges the patch with existing resource intelligently
+//   - JSON Merge Patch: Merges the patch with existing resource
 //   - Preserves fields not specified in the patch
 //   - No need for resourceVersion (optimistic concurrency)
 //
@@ -291,7 +298,7 @@ func (c *Client) PatchResource(ctx context.Context, gvk schema.GroupVersionKind,
 	obj.SetNamespace(namespace)
 	obj.SetName(name)
 
-	// Apply the patch using strategic merge patch type
+	// Apply the patch using JSON merge patch type
 	// This is equivalent to kubectl patch with --type=merge
 	patch := client.RawPatch(types.MergePatchType, patchData)
 	

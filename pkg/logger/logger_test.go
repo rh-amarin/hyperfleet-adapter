@@ -186,7 +186,10 @@ func TestLoggerContextValues(t *testing.T) {
 			if impl, ok := log.(*logger); ok {
 				val := impl.context.Value(tt.expectedKey)
 				if val == nil {
-					t.Errorf("Expected context value for key %s, got nil", tt.expectedKey)
+					t.Errorf("Expected context value for key %v, got nil", tt.expectedKey)
+				}
+				if val != tt.expectedValue {
+					t.Errorf("Expected context value %v, got %v", tt.expectedValue, val)
 				}
 			}
 		})
@@ -260,7 +263,7 @@ func TestLoggerChaining(t *testing.T) {
 
 		log.Extra("key1", "value1").Extra("key2", "value2").Info("Test multiple extras")
 	})
-		}
+}
 
 func TestLoggerConstants(t *testing.T) {
 	tests := []struct {

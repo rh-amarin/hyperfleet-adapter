@@ -22,10 +22,6 @@ package main
 
 import (
     "context"
-    "os"
-    "os/signal"
-    "syscall"
-    "time"
 
     "github.com/cloudevents/sdk-go/v2/event"
     "github.com/golang/glog"
@@ -43,9 +39,10 @@ func main() {
         return nil
     }
 
-    // Create subscriber from environment variables
-    // Automatically reads BROKER_SUBSCRIPTION_ID from env if empty string passed
-    subscriber, err := brokerconsumer.NewSubscriber("")
+    // Create subscriber - pass empty string to use BROKER_SUBSCRIPTION_ID env var,
+    // or pass an explicit subscription ID to override.
+    // NewSubscriber returns: (Subscriber, resolvedSubscriptionID, error)
+    subscriber, subscriptionID, err := brokerconsumer.NewSubscriber("")
     if err != nil {
         glog.Fatalf("Failed to create subscriber: %v", err)
     }
@@ -57,8 +54,6 @@ func main() {
 
     // Subscribe to topic/subscription
     // In Google Pub/Sub, the topic argument corresponds to the subscription name
-    subscriptionID := os.Getenv("BROKER_SUBSCRIPTION_ID")
-    
     if err := brokerconsumer.Subscribe(ctx, subscriber, subscriptionID, handler); err != nil {
         glog.Fatalf("Failed to subscribe: %v", err)
     }

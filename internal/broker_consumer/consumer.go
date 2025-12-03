@@ -71,8 +71,7 @@ func NewSubscriber(subscriptionID string) (Subscriber, string, error) {
 	if subscriptionID == "" {
 		return nil, "", fmt.Errorf("subscriptionID is required (pass as parameter or set BROKER_SUBSCRIPTION_ID environment variable)")
 	}
-	brokerType := os.Getenv("BROKER_TYPE")
-	glog.Infof("Creating %s subscriber for subscription: %s", brokerType, subscriptionID)
+	glog.Infof("Creating subscriber for subscription: %s", subscriptionID)
 
 	// Use hyperfleet-broker to create the subscriber with retry logic
 	// Configuration is read from environment variables by the broker library
@@ -82,9 +81,9 @@ func NewSubscriber(subscriptionID string) (Subscriber, string, error) {
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		subscriber, err = broker.NewSubscriber(subscriptionID)
 		if err == nil {
-				glog.Info("Broker subscriber created successfully")
+			glog.Info("Broker subscriber created successfully")
 			return subscriber, subscriptionID, nil
-			}
+		}
 
 		if attempt < maxRetries {
 			glog.Warningf("Failed to create subscriber (attempt %d/%d): %v. Retrying in %v...", attempt, maxRetries, err, retryDelay)
@@ -131,13 +130,15 @@ func Subscribe(ctx context.Context, subscriber Subscriber, subscriptionTopic str
 }
 
 // Close is a helper function to close a subscriber gracefully
-func Close(subscriber Subscriber) error {
+func Close(subscriber Subscriber) (error) {
+	if subscriber == nil {
+		return nil
+	}
 	glog.Info("Closing broker subscriber...")
 	
 	if err := subscriber.Close(); err != nil {
 		return fmt.Errorf("failed to close subscriber: %w", err)
 	}
-
 	glog.Info("Broker subscriber closed successfully")
 	return nil
 }

@@ -27,7 +27,7 @@ if [ "$CONTAINER_RUNTIME" = "podman" ]; then
     PROXY_HTTPS=$(get_podman_proxy "HTTPS_PROXY")
     
     if [ -n "$PROXY_HTTP" ] || [ -n "$PROXY_HTTPS" ]; then
-        echo "   Using proxy: $PROXY_HTTP"
+        echo "   Using proxy configuration"
         $CONTAINER_RUNTIME build \
             --build-arg HTTP_PROXY="$PROXY_HTTP" \
             --build-arg HTTPS_PROXY="$PROXY_HTTPS" \

@@ -3,11 +3,9 @@
 package k8s_client_integration
 
 import (
-	"strings"
 	"testing"
 	"time"
 
-	k8s_client "github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,10 +13,25 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// gvk provides commonly used GroupVersionKinds for integration tests.
+// This is a local copy to avoid depending on test-only exports from k8s_client.
+var gvk = struct {
+	Namespace schema.GroupVersionKind
+	Pod       schema.GroupVersionKind
+	Service   schema.GroupVersionKind
+	ConfigMap schema.GroupVersionKind
+	Secret    schema.GroupVersionKind
+}{
+	Namespace: schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Namespace"},
+	Pod:       schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"},
+	Service:   schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Service"},
+	ConfigMap: schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+	Secret:    schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"},
+}
+
 // TestIntegration_NewClient tests client initialization with real K8s API
 func TestIntegration_NewClient(t *testing.T) {
-	env := SetupTestEnv(t)
-	defer env.Cleanup(t)
+	env := GetSharedEnv(t)
 
 	t.Run("client is properly initialized", func(t *testing.T) {
 		assert.NotNil(t, env.GetClient())
@@ -29,8 +42,7 @@ func TestIntegration_NewClient(t *testing.T) {
 
 // TestIntegration_CreateResource tests creating resources in K8s
 func TestIntegration_CreateResource(t *testing.T) {
-	env := SetupTestEnv(t)
-	defer env.Cleanup(t)
+	env := GetSharedEnv(t)
 
 	t.Run("create namespace", func(t *testing.T) {
 		// Create namespace resource
@@ -47,7 +59,7 @@ func TestIntegration_CreateResource(t *testing.T) {
 				},
 			},
 		}
-		ns.SetGroupVersionKind(k8s_client.CommonResourceKinds.Namespace)
+		ns.SetGroupVersionKind(gvk.Namespace)
 
 		// Create the namespace
 		created, err := env.GetClient().CreateResource(env.GetContext(), ns)
@@ -81,7 +93,7 @@ func TestIntegration_CreateResource(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(gvk.ConfigMap)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -95,8 +107,7 @@ func TestIntegration_CreateResource(t *testing.T) {
 
 // TestIntegration_GetResource tests getting resources from K8s
 func TestIntegration_GetResource(t *testing.T) {
-	env := SetupTestEnv(t)
-	defer env.Cleanup(t)
+	env := GetSharedEnv(t)
 
 	t.Run("get existing namespace", func(t *testing.T) {
 		nsName := "test-get-ns-" + time.Now().Format("20060102150405")
@@ -111,13 +122,13 @@ func TestIntegration_GetResource(t *testing.T) {
 				},
 			},
 		}
-		ns.SetGroupVersionKind(k8s_client.CommonResourceKinds.Namespace)
+		ns.SetGroupVersionKind(gvk.Namespace)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), ns)
 		require.NoError(t, err)
 
 		// Get the namespace
-		retrieved, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.Namespace, "", nsName)
+		retrieved, err := env.GetClient().GetResource(env.GetContext(), gvk.Namespace, "", nsName)
 		require.NoError(t, err)
 		require.NotNil(t, retrieved)
 
@@ -126,15 +137,14 @@ func TestIntegration_GetResource(t *testing.T) {
 	})
 
 	t.Run("get non-existent resource returns error", func(t *testing.T) {
-		_, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.Namespace, "", "non-existent-namespace-12345")
+		_, err := env.GetClient().GetResource(env.GetContext(), gvk.Namespace, "", "non-existent-namespace-12345")
 		require.Error(t, err)
 	})
 }
 
 // TestIntegration_ListResources tests listing resources with selectors
 func TestIntegration_ListResources(t *testing.T) {
-	env := SetupTestEnv(t)
-	defer env.Cleanup(t)
+	env := GetSharedEnv(t)
 
 	t.Run("list configmaps with label selector", func(t *testing.T) {
 		timestamp := time.Now().Format("20060102150405")
@@ -158,7 +168,7 @@ func TestIntegration_ListResources(t *testing.T) {
 					},
 				},
 			}
-			cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+			cm.SetGroupVersionKind(gvk.ConfigMap)
 
 			_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 			require.NoError(t, err)
@@ -166,7 +176,7 @@ func TestIntegration_ListResources(t *testing.T) {
 
 		// List configmaps with label selector
 		selector := "test-group=" + timestamp
-		list, err := env.GetClient().ListResources(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", selector)
+		list, err := env.GetClient().ListResources(env.GetContext(), gvk.ConfigMap, "default", selector)
 		require.NoError(t, err)
 		require.NotNil(t, list)
 
@@ -177,8 +187,7 @@ func TestIntegration_ListResources(t *testing.T) {
 
 // TestIntegration_UpdateResource tests updating resources
 func TestIntegration_UpdateResource(t *testing.T) {
-	env := SetupTestEnv(t)
-	defer env.Cleanup(t)
+	env := GetSharedEnv(t)
 
 	t.Run("update configmap data", func(t *testing.T) {
 		cmName := "test-update-cm-" + time.Now().Format("20060102150405")
@@ -197,7 +206,7 @@ func TestIntegration_UpdateResource(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(gvk.ConfigMap)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -223,8 +232,7 @@ func TestIntegration_UpdateResource(t *testing.T) {
 
 // TestIntegration_DeleteResource tests deleting resources
 func TestIntegration_DeleteResource(t *testing.T) {
-	env := SetupTestEnv(t)
-	defer env.Cleanup(t)
+	env := GetSharedEnv(t)
 
 	t.Run("delete namespace", func(t *testing.T) {
 		nsName := "test-delete-ns-" + time.Now().Format("20060102150405")
@@ -239,22 +247,22 @@ func TestIntegration_DeleteResource(t *testing.T) {
 				},
 			},
 		}
-		ns.SetGroupVersionKind(k8s_client.CommonResourceKinds.Namespace)
+		ns.SetGroupVersionKind(gvk.Namespace)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), ns)
 		require.NoError(t, err)
 
 		// Verify it exists
-		_, err = env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.Namespace, "", nsName)
+		_, err = env.GetClient().GetResource(env.GetContext(), gvk.Namespace, "", nsName)
 		require.NoError(t, err)
 
 		// Delete the namespace
-		err = env.GetClient().DeleteResource(env.GetContext(), k8s_client.CommonResourceKinds.Namespace, "", nsName)
+		err = env.GetClient().DeleteResource(env.GetContext(), gvk.Namespace, "", nsName)
 		require.NoError(t, err)
 
 		// Verify it's being deleted (namespaces go into Terminating phase)
 		time.Sleep(100 * time.Millisecond)
-		deletedNs, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.Namespace, "", nsName)
+		deletedNs, err := env.GetClient().GetResource(env.GetContext(), gvk.Namespace, "", nsName)
 		if err == nil {
 			// Namespace still exists, should have deletionTimestamp set (Terminating state)
 			deletionTimestamp := deletedNs.GetDeletionTimestamp()
@@ -268,8 +276,7 @@ func TestIntegration_DeleteResource(t *testing.T) {
 
 // TestIntegration_ResourceLifecycle tests full CRUD lifecycle
 func TestIntegration_ResourceLifecycle(t *testing.T) {
-	env := SetupTestEnv(t)
-	defer env.Cleanup(t)
+	env := GetSharedEnv(t)
 
 	t.Run("full configmap lifecycle", func(t *testing.T) {
 		cmName := "lifecycle-cm-" + time.Now().Format("20060102150405")
@@ -291,14 +298,14 @@ func TestIntegration_ResourceLifecycle(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(gvk.ConfigMap)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
 		assert.Equal(t, cmName, created.GetName())
 
 		// 2. Get and verify
-		retrieved, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
+		retrieved, err := env.GetClient().GetResource(env.GetContext(), gvk.ConfigMap, "default", cmName)
 		require.NoError(t, err)
 		data, _, _ := unstructured.NestedString(retrieved.Object, "data", "stage")
 		assert.Equal(t, "created", data)
@@ -312,25 +319,24 @@ func TestIntegration_ResourceLifecycle(t *testing.T) {
 		assert.Equal(t, "updated", data)
 
 		// 4. Get and verify update
-		retrieved2, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
+		retrieved2, err := env.GetClient().GetResource(env.GetContext(), gvk.ConfigMap, "default", cmName)
 		require.NoError(t, err)
 		data, _, _ = unstructured.NestedString(retrieved2.Object, "data", "stage")
 		assert.Equal(t, "updated", data)
 
 		// 5. Delete
-		err = env.GetClient().DeleteResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
+		err = env.GetClient().DeleteResource(env.GetContext(), gvk.ConfigMap, "default", cmName)
 		require.NoError(t, err)
 
 		// 6. Verify deletion
-		_, err = env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
+		_, err = env.GetClient().GetResource(env.GetContext(), gvk.ConfigMap, "default", cmName)
 		assert.Error(t, err)
 	})
 }
 
 // TestIntegration_PatchResource tests patching resources with strategic merge
 func TestIntegration_PatchResource(t *testing.T) {
-	env := SetupTestEnv(t)
-	defer env.Cleanup(t)
+	env := GetSharedEnv(t)
 
 	t.Run("patch configmap adds new data field", func(t *testing.T) {
 		cmName := "test-patch-cm-" + time.Now().Format("20060102150405")
@@ -352,7 +358,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(gvk.ConfigMap)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -370,7 +376,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 			}
 		}`)
 
-		patched, err := env.GetClient().PatchResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName, patchData)
+		patched, err := env.GetClient().PatchResource(env.GetContext(), gvk.ConfigMap, "default", cmName, patchData)
 		require.NoError(t, err)
 		require.NotNil(t, patched)
 
@@ -405,7 +411,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(gvk.ConfigMap)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -417,7 +423,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 			}
 		}`)
 
-		patched, err := env.GetClient().PatchResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName, patchData)
+		patched, err := env.GetClient().PatchResource(env.GetContext(), gvk.ConfigMap, "default", cmName, patchData)
 		require.NoError(t, err)
 
 		data, _, _ := unstructured.NestedStringMap(patched.Object, "data")
@@ -427,7 +433,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 
 	t.Run("patch non-existent resource returns error", func(t *testing.T) {
 		patchData := []byte(`{"data": {"key": "value"}}`)
-		_, err := env.GetClient().PatchResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", "non-existent-cm-12345", patchData)
+		_, err := env.GetClient().PatchResource(env.GetContext(), gvk.ConfigMap, "default", "non-existent-cm-12345", patchData)
 		require.Error(t, err)
 		assert.True(t, k8serrors.IsNotFound(err), "Should return NotFound error")
 	})
@@ -446,14 +452,14 @@ func TestIntegration_PatchResource(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(gvk.ConfigMap)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
 
 		// Try to patch with invalid JSON
 		invalidPatchData := []byte(`{invalid json}`)
-		_, err = env.GetClient().PatchResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName, invalidPatchData)
+		_, err = env.GetClient().PatchResource(env.GetContext(), gvk.ConfigMap, "default", cmName, invalidPatchData)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid patch data", "Should return invalid patch data error")
 	})
@@ -461,8 +467,7 @@ func TestIntegration_PatchResource(t *testing.T) {
 
 // TestIntegration_ErrorScenarios tests various error conditions
 func TestIntegration_ErrorScenarios(t *testing.T) {
-	env := SetupTestEnv(t)
-	defer env.Cleanup(t)
+	env := GetSharedEnv(t)
 
 	t.Run("create duplicate resource returns AlreadyExists error", func(t *testing.T) {
 		cmName := "test-duplicate-cm-" + time.Now().Format("20060102150405")
@@ -478,7 +483,7 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(gvk.ConfigMap)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -494,7 +499,7 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 				},
 			},
 		}
-		cm2.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+		cm2.SetGroupVersionKind(gvk.ConfigMap)
 
 		_, err = env.GetClient().CreateResource(env.GetContext(), cm2)
 		require.Error(t, err)
@@ -505,12 +510,12 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 		// Invalid selector syntax - use an actually invalid one that will fail parsing
 		// controller-runtime is lenient with some selectors, so use one that's truly invalid
 		invalidSelector := "app===invalid"
-		_, err := env.GetClient().ListResources(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", invalidSelector)
+		_, err := env.GetClient().ListResources(env.GetContext(), gvk.ConfigMap, "default", invalidSelector)
 		require.Error(t, err)
 	})
 
 	t.Run("get with empty name returns error", func(t *testing.T) {
-		_, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", "")
+		_, err := env.GetClient().GetResource(env.GetContext(), gvk.ConfigMap, "default", "")
 		require.Error(t, err)
 	})
 
@@ -528,16 +533,16 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(gvk.ConfigMap)
 
 		_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
 
-		err = env.GetClient().DeleteResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
+		err = env.GetClient().DeleteResource(env.GetContext(), gvk.ConfigMap, "default", cmName)
 		require.NoError(t, err)
 
 		// Try to delete again - should succeed (idempotent)
-		err = env.GetClient().DeleteResource(env.GetContext(), k8s_client.CommonResourceKinds.ConfigMap, "default", cmName)
+		err = env.GetClient().DeleteResource(env.GetContext(), gvk.ConfigMap, "default", cmName)
 		require.NoError(t, err, "Deleting already deleted resource should succeed")
 	})
 
@@ -558,7 +563,7 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 				},
 			},
 		}
-		cm.SetGroupVersionKind(k8s_client.CommonResourceKinds.ConfigMap)
+		cm.SetGroupVersionKind(gvk.ConfigMap)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
@@ -569,18 +574,21 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = env.GetClient().UpdateResource(env.GetContext(), created)
-		// Controller-runtime's optimistic concurrency may handle this differently
-		// It might succeed or fail depending on the resource state
-		if err != nil {
-			t.Logf("Update without resourceVersion failed (expected in some cases): %v", err)
+		// Controller-runtime typically rejects updates without resourceVersion
+		// but behavior may vary - verify at least that it doesn't silently corrupt data
+		if err == nil {
+			// If it succeeded, verify the update was applied
+			retrieved, getErr := env.GetClient().GetResource(env.GetContext(), gvk.ConfigMap, "default", cmName)
+			require.NoError(t, getErr)
+			data, _, _ := unstructured.NestedString(retrieved.Object, "data", "key")
+			assert.Equal(t, "updated", data)
 		}
 	})
 }
 
 // TestIntegration_DifferentResourceTypes tests various K8s resource types
 func TestIntegration_DifferentResourceTypes(t *testing.T) {
-	env := SetupTestEnv(t)
-	defer env.Cleanup(t)
+	env := GetSharedEnv(t)
 
 	t.Run("create and get service", func(t *testing.T) {
 		svcName := "test-service-" + time.Now().Format("20060102150405")
@@ -610,7 +618,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 				},
 			},
 		}
-		svc.SetGroupVersionKind(k8s_client.CommonResourceKinds.Service)
+		svc.SetGroupVersionKind(gvk.Service)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), svc)
 		require.NoError(t, err)
@@ -620,7 +628,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 		assert.Equal(t, svcName, created.GetName())
 
 		// Get the service
-		retrieved, err := env.GetClient().GetResource(env.GetContext(), k8s_client.CommonResourceKinds.Service, "default", svcName)
+		retrieved, err := env.GetClient().GetResource(env.GetContext(), gvk.Service, "default", svcName)
 		require.NoError(t, err)
 		assert.Equal(t, svcName, retrieved.GetName())
 	})
@@ -647,7 +655,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 		})
 		_, err := env.GetClient().CreateResource(env.GetContext(), defaultSA)
 		// Ignore AlreadyExists error
-		if err != nil && !strings.Contains(err.Error(), "already exists") {
+		if err != nil && !k8serrors.IsAlreadyExists(err) {
 			t.Logf("Warning: Could not create default ServiceAccount: %v", err)
 		}
 		// Give it a moment to be processed
@@ -679,7 +687,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 					},
 				},
 			}
-			pod.SetGroupVersionKind(k8s_client.CommonResourceKinds.Pod)
+			pod.SetGroupVersionKind(gvk.Pod)
 
 			_, err := env.GetClient().CreateResource(env.GetContext(), pod)
 			require.NoError(t, err)
@@ -687,7 +695,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 
 		// List pods with label selector
 		selector := "test-group=" + timestamp
-		list, err := env.GetClient().ListResources(env.GetContext(), k8s_client.CommonResourceKinds.Pod, "default", selector)
+		list, err := env.GetClient().ListResources(env.GetContext(), gvk.Pod, "default", selector)
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(list.Items), 2, "Should find at least 2 pods")
 	})
@@ -710,7 +718,7 @@ func TestIntegration_DifferentResourceTypes(t *testing.T) {
 				},
 			},
 		}
-		secret.SetGroupVersionKind(k8s_client.CommonResourceKinds.Secret)
+		secret.SetGroupVersionKind(gvk.Secret)
 
 		created, err := env.GetClient().CreateResource(env.GetContext(), secret)
 		require.NoError(t, err)
