@@ -1,0 +1,87 @@
+# HyperFleet Adapter Framework Configuration (Default/Fallback)
+#
+# This is a minimal default configuration packaged with the container image.
+# In production, this should be overridden via:
+#   1. CONFIG_FILE environment variable (highest priority)
+#   2. ConfigMap mounted at /etc/adapter/config/adapter.yaml
+#
+# See configs/adapter-config-template.yaml for full configuration options.
+
+apiVersion: hyperfleet.redhat.com/v1alpha1
+kind: AdapterConfig
+metadata:
+  name: hyperfleet-adapter
+  namespace: hyperfleet-system
+  labels:
+    hyperfleet.io/component: adapter
+
+spec:
+  adapter:
+    version: "0.0.1"
+
+  hyperfleetApi:
+    timeout: 2s
+    retryAttempts: 3
+    retryBackoff: exponential
+
+  kubernetes:
+    apiVersion: "v1"
+
+  # Global params - these should be provided via environment variables or ConfigMap
+  params:
+    - name: "hyperfleetApiBaseUrl"
+      source: "env.HYPERFLEET_API_BASE_URL"
+      type: "string"
+      description: "Base URL for the HyperFleet API"
+      required: true
+
+    - name: "hyperfleetApiVersion"
+      source: "env.HYPERFLEET_API_VERSION"
+      type: "string"
+      default: "v1"
+      description: "API version to use"
+      required: true
+
+    - name: "hyperfleetApiToken"
+      source: "env.HYPERFLEET_API_TOKEN"
+      type: "string"
+      description: "Authentication token for API access"
+      required: true
+
+    - name: "clusterId"
+      source: "event.cluster_id"
+      type: "string"
+      description: "Unique identifier for the target cluster"
+      required: true
+
+    - name: "resourceId"
+      source: "event.resource_id"
+      type: "string"
+      description: "Unique identifier for the resource"
+      required: true
+
+    - name: "resourceType"
+      source: "event.resource_type"
+      type: "string"
+      description: "Type of the resource being managed"
+      required: true
+
+    - name: "eventGenerationId"
+      source: "event.generation"
+      type: "string"
+      description: "Event generation ID for idempotency checks"
+      required: true
+
+    - name: "eventHref"
+      source: "event.href"
+      type: "string"
+      description: "Reference URL for the resource"
+      required: true
+
+  # Preconditions, resources, and post-processing should be defined
+  # in a production configuration mounted via ConfigMap
+  preconditions: []
+  resources: []
+  post:
+    payloads: []
+    postActions: []

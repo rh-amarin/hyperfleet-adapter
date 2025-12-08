@@ -9,6 +9,11 @@ IMAGE_TAG ?= latest
 # Build metadata
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_TAG := $(shell git describe --tags --exact-match 2>/dev/null || echo "")
+
+# Dev image configuration - set QUAY_USER to push to personal registry
+# Usage: QUAY_USER=myuser make image-dev
+QUAY_USER ?=
+DEV_TAG ?= dev-$(GIT_COMMIT)
 BUILD_DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 
 # LDFLAGS for build
@@ -157,8 +162,43 @@ ifeq ($(CONTAINER_RUNTIME),none)
 	@exit 1
 else
 	@echo "Building container image with $(CONTAINER_RUNTIME)..."
-	$(CONTAINER_CMD) build -t $(PROJECT_NAME):$(VERSION) .
-	@echo "✅ Image built: $(PROJECT_NAME):$(VERSION)"
+	$(CONTAINER_CMD) build -t $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG) .
+	@echo "✅ Image built: $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG)"
+endif
+
+.PHONY: image-push
+image-push: image ## Build and push container image to registry
+ifeq ($(CONTAINER_RUNTIME),none)
+	@echo "❌ ERROR: No container runtime found"
+	@echo "Please install Docker or Podman"
+	@exit 1
+else
+	@echo "Pushing image $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG)..."
+	$(CONTAINER_CMD) push $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG)
+	@echo "✅ Image pushed: $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG)"
+endif
+
+.PHONY: image-dev
+image-dev: ## Build and push to personal Quay registry (requires QUAY_USER)
+ifndef QUAY_USER
+	@echo "❌ ERROR: QUAY_USER is not set"
+	@echo ""
+	@echo "Usage: QUAY_USER=myuser make image-dev"
+	@echo ""
+	@echo "This will build and push to: quay.io/$$QUAY_USER/$(PROJECT_NAME):$(DEV_TAG)"
+	@exit 1
+endif
+ifeq ($(CONTAINER_RUNTIME),none)
+	@echo "❌ ERROR: No container runtime found"
+	@echo "Please install Docker or Podman"
+	@exit 1
+else
+	@echo "Building dev image quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG)..."
+	$(CONTAINER_CMD) build -t quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG) .
+	@echo "Pushing dev image..."
+	$(CONTAINER_CMD) push quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG)
+	@echo ""
+	@echo "✅ Dev image pushed: quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG)"
 endif
 
 .PHONY: verify

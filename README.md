@@ -107,8 +107,9 @@ hyperfleet-adapter/
 | `make test-all` | Run all tests (unit + integration) |
 | `make test-coverage` | Generate test coverage report |
 | `make lint` | Run golangci-lint |
-| `make docker-build` | Build Docker image |
-| `make docker-push` | Push Docker image |
+| `make image` | Build container image |
+| `make image-push` | Build and push container image to registry |
+| `make image-dev` | Build and push to personal Quay registry (requires QUAY_USER) |
 | `make fmt` | Format code |
 | `make mod-tidy` | Tidy Go module dependencies |
 | `make clean` | Clean build artifacts |
@@ -156,19 +157,22 @@ helm delete hyperfleet-adapter
 
 For detailed Helm chart documentation, see [charts/README.md](./charts/README.md).
 
-### Docker Image
+### Container Image
 
-Build and push Docker images:
+Build and push container images:
 
 ```bash
-# Build Docker image
-make docker-build
+# Build container image
+make image
 
 # Build with custom tag
-make docker-build IMAGE_TAG=v1.0.0
+make image IMAGE_TAG=v1.0.0
 
-# Push Docker image
-make docker-push
+# Build and push to default registry
+make image-push
+
+# Build and push to personal Quay registry (for development)
+QUAY_USER=myuser make image-dev
 ```
 
 Default image: `quay.io/openshift-hyperfleet/hyperfleet-adapter:latest`
