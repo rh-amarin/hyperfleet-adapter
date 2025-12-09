@@ -227,8 +227,8 @@ github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8
 github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJwooC2xJA040=
 github.com/opencontainers/image-spec v1.1.1/go.mod h1:qpqAh3Dmcf36wStyyWU+kCeDgrGnAve2nCC8+7h8Q0M=
-github.com/openshift-hyperfleet/hyperfleet-broker v0.0.1 h1:jsW80nvZcDyZl72y5DAsJc7X+1ZKb3OoxVVmi9mdjeY=
-github.com/openshift-hyperfleet/hyperfleet-broker v0.0.1/go.mod h1:z7QpS2m6gaqTbgPazl1lYYy+JuyNDMkMtco12rM29nU=
+github.com/openshift-hyperfleet/hyperfleet-broker v1.0.0 h1:JfIF9ZVFIaXmo0hKAN42SCwItpqEHXtc54+WHRKuYg4=
+github.com/openshift-hyperfleet/hyperfleet-broker v1.0.0/go.mod h1:z7QpS2m6gaqTbgPazl1lYYy+JuyNDMkMtco12rM29nU=
 github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
 github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
@@ -286,8 +286,6 @@ github.com/subosito/gotenv v1.6.0 h1:9NlTDc1FTs4qu0DDq7AEtTPNw6SVm7uBMsUCUjABIf8
 github.com/subosito/gotenv v1.6.0/go.mod h1:Dk4QP5c2W3ibzajGcXpNraDfq2IrhjMIvMSWPKKo0FU=
 github.com/testcontainers/testcontainers-go v0.40.0 h1:pSdJYLOVgLE8YdUY2FHQ1Fxu+aMnb6JfVz1mxk7OeMU=
 github.com/testcontainers/testcontainers-go v0.40.0/go.mod h1:FSXV5KQtX2HAMlm7U3APNyLkkap35zNLxukw9oBi/MY=
-github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.40.0 h1:wGznWj8ZlEoqWfMN2L+EWjQBbjZ99vhoy/S61h+cED0=
-github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.40.0/go.mod h1:Y+9/8YMZo3ElEZmHZOgFnjKrxE4+H2OFrjWdYzm/jtU=
 github.com/tklauser/go-sysconf v0.3.12 h1:0QaGUFOdQaIVdPgfITYzaTegZvdCjmYO52cSFAEVmqU=
 github.com/tklauser/go-sysconf v0.3.12/go.mod h1:Ho14jnntGE1fpdOqQEEaiKRpvIavV0hSfmBq8nJbHYI=
 github.com/tklauser/numcpus v0.6.1 h1:ng9scYS7az0Bk4OZLvrNXNSAO2Pxr1XXRAPyjhIx+Fk=

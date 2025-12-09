@@ -9,7 +9,7 @@ require (
 	github.com/google/cel-go v0.26.1
 	github.com/google/uuid v1.6.0
 	github.com/mitchellh/copystructure v1.2.0
-	github.com/openshift-hyperfleet/hyperfleet-broker v0.0.1
+	github.com/openshift-hyperfleet/hyperfleet-broker v1.0.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.40.0
 	gopkg.in/yaml.v3 v3.0.1
