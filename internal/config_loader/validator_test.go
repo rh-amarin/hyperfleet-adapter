@@ -26,6 +26,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -57,6 +58,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -84,6 +86,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -110,6 +113,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -136,6 +140,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -162,6 +167,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -189,6 +195,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -216,6 +223,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -241,6 +249,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -292,6 +301,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -319,6 +329,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -345,6 +356,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -376,6 +388,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -439,6 +452,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -463,6 +477,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -488,6 +503,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -537,6 +553,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -566,6 +583,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -593,6 +611,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -620,6 +639,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -646,6 +666,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -675,6 +696,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -699,6 +721,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -844,6 +867,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -888,6 +912,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -983,6 +1008,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -1006,6 +1032,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -1030,6 +1057,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -1051,6 +1079,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -1073,6 +1102,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -1094,6 +1124,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"

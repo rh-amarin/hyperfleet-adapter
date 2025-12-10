@@ -16,6 +16,7 @@ type Logger interface {
 	Warning(message string)
 	Error(message string)
 	Fatal(message string)
+	Flush() // Flush pending log entries immediately
 }
 
 var _ Logger = &logger{}
@@ -141,6 +142,11 @@ func (l *logger) Error(message string) {
 
 func (l *logger) Fatal(message string) {
 	l.log(message, glog.Fatalln)
+}
+
+// Flush flushes pending log entries immediately
+func (l *logger) Flush() {
+	glog.Flush()
 }
 
 func (l *logger) log(message string, glogFunc func(args ...interface{})) {

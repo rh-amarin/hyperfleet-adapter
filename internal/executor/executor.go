@@ -72,21 +72,31 @@ func (e *Executor) Execute(ctx context.Context, evt *event.Event) *ExecutionResu
 		Params:  make(map[string]interface{}),
 	}
 
-	eventLogger.Infof("Starting event execution: id=%s", evt.ID())
+	eventLogger.Infof("========== EVENT RECEIVED ==========")
+	eventLogger.Infof("Event ID: %s", evt.ID())
+	eventLogger.Infof("Event Type: %s", evt.Type())
+	eventLogger.Infof("Event Source: %s", evt.Source())
+	eventLogger.Infof("Event Time: %s", evt.Time())
+	eventLogger.Infof("=====================================")
 
 	// ============================================================================
 	// Phase 1: Parameter Extraction
 	// ============================================================================
+	eventLogger.Infof(">>> PHASE: Parameter Extraction")
 	result.Phase = PhaseParamExtraction
 	if err := e.executeParamExtraction(execCtx); err != nil {
-		return e.finishWithError(result, execCtx, err, "parameter extraction failed", eventLogger)
+		return e.finishWithError(result, execCtx, err, fmt.Sprintf("parameter extraction failed: %v", err), eventLogger)
 	}
 	result.Params = execCtx.Params
 	eventLogger.Infof("Parameter extraction completed: extracted %d params", len(execCtx.Params))
+	for k, v := range execCtx.Params {
+		eventLogger.V(1).Infof("  param[%s] = %v (type: %T)", k, v, v)
+	}
 
 	// ============================================================================
 	// Phase 2: Preconditions
 	// ============================================================================
+	eventLogger.Infof(">>> PHASE: Preconditions (%d configured)", len(e.config.AdapterConfig.Spec.Preconditions))
 	result.Phase = PhasePreconditions
 	precondOutcome := e.precondExecutor.ExecuteAll(ctxWithEventID, e.config.AdapterConfig.Spec.Preconditions, execCtx, eventLogger)
 	result.PreconditionResults = precondOutcome.Results
@@ -104,15 +114,16 @@ func (e *Executor) Execute(ctx context.Context, evt *event.Event) *ExecutionResu
 		result.ResourcesSkipped = true
 		result.SkipReason = precondOutcome.NotMetReason
 		execCtx.SetSkipped("PreconditionNotMet", precondOutcome.NotMetReason)
-		eventLogger.Infof("Preconditions not met, resources will be skipped: %s", precondOutcome.NotMetReason)
+		eventLogger.Infof("Preconditions NOT MET - resources will be skipped: %s", precondOutcome.NotMetReason)
 	} else {
 		// All preconditions matched
-		eventLogger.Infof("Preconditions completed: %d preconditions evaluated", len(precondOutcome.Results))
+		eventLogger.Infof("Preconditions ALL MET: %d/%d passed", len(precondOutcome.Results), len(precondOutcome.Results))
 	}
 
 	// ============================================================================
 	// Phase 3: Resources (skip if preconditions not met or previous error)
 	// ============================================================================
+	eventLogger.Infof(">>> PHASE: Resources (%d configured)", len(e.config.AdapterConfig.Spec.Resources))
 	result.Phase = PhaseResources
 	if result.Status == StatusSuccess && !result.ResourcesSkipped {
 		resourceResults, err := e.resourceExecutor.ExecuteAll(ctxWithEventID, e.config.AdapterConfig.Spec.Resources, execCtx, eventLogger)
@@ -123,20 +134,28 @@ func (e *Executor) Execute(ctx context.Context, evt *event.Event) *ExecutionResu
 			result.Error = err
 			result.ErrorReason = "resource execution failed"
 			execCtx.SetError("ResourceFailed", err.Error())
-			eventLogger.Error(fmt.Sprintf("Resource execution failed: %v", err))
+			eventLogger.Error(fmt.Sprintf("Resource execution FAILED: %v", err))
 			// Continue to post actions for error reporting
 		} else {
-			eventLogger.Infof("Resources completed: %d resources processed", len(resourceResults))
+			eventLogger.Infof("Resources completed: %d/%d resources processed successfully", len(resourceResults), len(resourceResults))
+			for _, r := range resourceResults {
+				eventLogger.Infof("  resource[%s]: %s %s/%s (operation: %s)", r.Name, r.Kind, r.Namespace, r.ResourceName, r.Operation)
+			}
 		}
 	} else if result.ResourcesSkipped {
-		eventLogger.Infof("Resources skipped: %s", result.SkipReason)
+		eventLogger.Infof("Resources SKIPPED: %s", result.SkipReason)
 	} else if result.Status == StatusFailed {
-		eventLogger.Infof("Resources skipped due to previous error")
+		eventLogger.Infof("Resources SKIPPED due to previous error")
 	}
 
 	// ============================================================================
 	// Phase 4: Post Actions (always execute for error reporting)
 	// ============================================================================
+	postActionCount := 0
+	if e.config.AdapterConfig.Spec.Post != nil {
+		postActionCount = len(e.config.AdapterConfig.Spec.Post.PostActions)
+	}
+	eventLogger.Infof(">>> PHASE: Post Actions (%d configured)", postActionCount)
 	result.Phase = PhasePostActions
 	postResults, err := e.postActionExecutor.ExecuteAll(ctxWithEventID, e.config.AdapterConfig.Spec.Post, execCtx, eventLogger)
 	result.PostActionResults = postResults
@@ -145,9 +164,16 @@ func (e *Executor) Execute(ctx context.Context, evt *event.Event) *ExecutionResu
 		result.Status = StatusFailed
 		result.Error = err
 		result.ErrorReason = "post action execution failed"
-		eventLogger.Error(fmt.Sprintf("Post action execution failed: %v", err))
+		eventLogger.Error(fmt.Sprintf("Post action execution FAILED: %v", err))
 	} else {
-		eventLogger.Infof("Post actions completed: %d actions executed", len(postResults))
+		eventLogger.Infof("Post actions completed: %d/%d actions executed successfully", len(postResults), postActionCount)
+		for _, r := range postResults {
+			if r.APICallMade {
+				eventLogger.Infof("  action[%s]: status=%s httpStatus=%d", r.Name, r.Status, r.HTTPStatus)
+			} else {
+				eventLogger.Infof("  action[%s]: status=%s", r.Name, r.Status)
+			}
+		}
 	}
 
 	// ============================================================================
@@ -156,18 +182,20 @@ func (e *Executor) Execute(ctx context.Context, evt *event.Event) *ExecutionResu
 	result.ExecutionContext = execCtx
 
 	// Final logging
+	eventLogger.Infof("========== EXECUTION COMPLETE ==========")
 	if result.Status == StatusSuccess {
 		if result.ResourcesSkipped {
-			eventLogger.Infof("Event execution completed successfully (resources skipped): id=%s reason=%s",
-				evt.ID(), result.SkipReason)
+			eventLogger.Infof("Result: SUCCESS (resources skipped)")
+			eventLogger.Infof("Skip Reason: %s", result.SkipReason)
 		} else {
-			eventLogger.Infof("Event execution completed successfully: id=%s",
-				evt.ID())
+			eventLogger.Infof("Result: SUCCESS")
 		}
 	} else {
-		eventLogger.Error(fmt.Sprintf("Event execution failed: id=%s phase=%s reason=%s",
-			evt.ID(), result.Phase, result.ErrorReason))
+		eventLogger.Error("Result: FAILED")
+		eventLogger.Error(fmt.Sprintf("Failed Phase: %s", result.Phase))
+		eventLogger.Error(fmt.Sprintf("Error Reason: %s", result.ErrorReason))
 	}
+	eventLogger.Infof("=========================================")
 
 	return result
 }
@@ -199,16 +227,19 @@ func (e *Executor) executeParamExtraction(execCtx *ExecutionContext) error {
 
 // CreateHandler creates an event handler function that can be used with the broker subscriber
 // This is a convenience method for integrating with the broker_consumer package
+//
+// Error handling strategy:
+// - All failures are logged but the message is ACKed (return nil)
+// - This prevents infinite retry loops for non-recoverable errors (e.g., 400 Bad Request, invalid data)
 func (e *Executor) CreateHandler() func(ctx context.Context, evt *event.Event) error {
 	return func(ctx context.Context, evt *event.Event) error {
 		result := e.Execute(ctx, evt)
 
+		// Log failure but ACK the message to prevent retry loops
+		// Non-recoverable errors (4xx, validation failures) should not be retried
 		if result.Status == StatusFailed {
-			// Don't NACK for param extraction failures (invalid events should not be retried)
-			if result.Phase == PhaseParamExtraction {
-				return nil // ACK the event
-			}
-			return result.Error
+			e.config.Logger.Error(fmt.Sprintf("Event processing failed (ACKing to prevent retry): eventId=%s phase=%s reason=%s error=%v",
+				result.EventID, result.Phase, result.ErrorReason, result.Error))
 		}
 
 		// StatusSkipped is not an error - preconditions not met is expected behavior

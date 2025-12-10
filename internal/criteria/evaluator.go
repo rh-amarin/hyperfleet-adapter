@@ -252,18 +252,67 @@ func (e *Evaluator) EvaluateCEL(expression string) (*CELResult, error) {
 	})
 }
 
-// EvaluateCELBool evaluates a CEL expression that returns a boolean
+// EvaluateCELBool evaluates a CEL expression that returns a boolean.
+// Returns (false, error) on failure - ignore the error for safe default.
 func (e *Evaluator) EvaluateCELBool(expression string) (bool, error) {
 	return withCELEvaluator(e, func(c *CELEvaluator) (bool, error) {
 		return c.EvaluateBool(expression)
 	})
 }
 
-// EvaluateCELString evaluates a CEL expression that returns a string
+// EvaluateCELString evaluates a CEL expression that returns a string.
+// Returns ("", error) on failure - ignore the error for safe default.
 func (e *Evaluator) EvaluateCELString(expression string) (string, error) {
 	return withCELEvaluator(e, func(c *CELEvaluator) (string, error) {
 		return c.EvaluateString(expression)
 	})
+}
+
+// Expression/Value definition keys
+const (
+	ExpressionKey = "expression"
+	DefaultKey    = "default"
+	ValueKey      = "value"
+)
+
+// EvaluateExpressionDef evaluates an expression definition map.
+// The map should contain:
+//   - "expression": CEL expression string (required)
+//   - "default": default value on failure (optional)
+//
+// Behavior:
+//   - No default → returns whatever type CEL expression returns (nil on failure)
+//   - With default → returns default value on evaluation failure
+func (e *Evaluator) EvaluateExpressionDef(def map[string]any) (any, bool) {
+	expr, ok := def[ExpressionKey].(string)
+	if !ok || expr == "" {
+		return nil, false
+	}
+
+	exprStr := strings.TrimSpace(expr)
+	defaultVal, hasDefault := def[DefaultKey]
+
+	// Evaluate CEL expression
+	result, err := e.EvaluateCEL(exprStr)
+	if err != nil || result.HasError() || result.Value == nil {
+		// On failure, return default if specified
+		if hasDefault {
+			return defaultVal, true
+		}
+		return nil, true
+	}
+
+	return result.Value, true
+}
+
+// GetValueDef extracts a value from a value definition map.
+// The map should contain:
+//   - "value": the value to return (required)
+//
+// Returns the value and true if found, nil and false otherwise.
+func GetValueDef(def map[string]any) (any, bool) {
+	value, ok := def[ValueKey]
+	return value, ok
 }
 
 // EvaluateConditionAsCEL converts a condition to CEL and evaluates it
@@ -335,7 +384,10 @@ var operatorFuncs = map[Operator]evalFunc{
 func negate(fn evalFunc) evalFunc {
 	return func(a, b interface{}) (bool, error) {
 		result, err := fn(a, b)
-		return !result, err
+		if err != nil {
+			return false, err
+		}
+		return !result, nil
 	}
 }
 

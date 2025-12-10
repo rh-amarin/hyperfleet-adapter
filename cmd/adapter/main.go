@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -10,45 +9,100 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cloudevents/sdk-go/v2/event"
-	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/broker_consumer"
+	"github.com/golang/glog"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/config_loader"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/executor"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
+	"github.com/openshift-hyperfleet/hyperfleet-broker/broker"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // Build-time variables set via ldflags
 var (
-	version   = "dev"
+	version   = "0.1.0"
 	commit    = "none"
 	buildDate = "unknown"
 	tag       = "none"
 )
 
-const shutdownTimeout = 30 * time.Second
-
 // Command-line flags
 var configPath string
 
+// Environment variable names
+const (
+	EnvBrokerSubscriptionID = "BROKER_SUBSCRIPTION_ID"
+	EnvBrokerTopic          = "BROKER_TOPIC"
+)
+
 func main() {
-	// Define flags
-	flag.StringVar(&configPath, "config", "", fmt.Sprintf("Path to adapter configuration file (can also use %s env var)", config_loader.EnvConfigPath))
+	// Set glog to log to stderr by default (required for containers with read-only filesystems)
+	// This can be overridden by --logtostderr=false if needed
+	_ = flag.Set("logtostderr", "true")
 
-	// Initialize glog flags
-	flag.Parse()
+	// Root command
+	rootCmd := &cobra.Command{
+		Use:   "adapter",
+		Short: "HyperFleet Adapter - event-driven Kubernetes resource manager",
+		Long: `HyperFleet Adapter listens for events from a message broker and 
+executes configured actions including Kubernetes resource management 
+and HyperFleet API calls.`,
+		// Disable default completion command
+		CompletionOptions: cobra.CompletionOptions{
+			DisableDefaultCmd: true,
+		},
+	}
 
-	// Run the application - logger.Flush() is deferred inside run()
-	if err := run(); err != nil {
-		// Error already logged in run(), exit with error code
+	// Add glog flags to root command (so they work on all subcommands)
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+
+	// Serve command
+	serveCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start the adapter and begin processing events",
+		Long: `Start the HyperFleet adapter in serve mode. The adapter will:
+- Connect to the configured message broker
+- Subscribe to the specified topic
+- Process incoming events according to the adapter configuration
+- Execute Kubernetes operations and HyperFleet API calls`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runServe()
+		},
+	}
+
+	// Add --config flag to serve command
+	serveCmd.Flags().StringVarP(&configPath, "config", "c", "",
+		fmt.Sprintf("Path to adapter configuration file (can also use %s env var)", config_loader.EnvConfigPath))
+
+	// Version command
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("HyperFleet Adapter\n")
+			fmt.Printf("  Version:    %s\n", version)
+			fmt.Printf("  Commit:     %s\n", commit)
+			fmt.Printf("  Built:      %s\n", buildDate)
+			fmt.Printf("  Tag:        %s\n", tag)
+		},
+	}
+
+	// Add subcommands
+	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(versionCmd)
+
+	// Execute
+	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-// run contains the main application logic and returns an error if the adapter fails.
-// Separating this from main() allows defers to run properly before os.Exit().
-func run() error {
-	// Flush logs when run() exits - this runs before returning to main()
-	defer logger.Flush()
+// runServe contains the main application logic for the serve command
+func runServe() error {
+	// Flush logs when runServe() exits
+	defer glog.Flush()
 
 	// Create context that cancels on system signals
 	ctx, cancel := context.WithCancel(context.Background())
@@ -69,18 +123,47 @@ func run() error {
 	}
 	log.Infof("Adapter configuration loaded successfully: name=%s namespace=%s",
 		adapterConfig.Metadata.Name, adapterConfig.Metadata.Namespace)
+	log.Infof("HyperFleet API client configured: timeout=%s retryAttempts=%d",
+		adapterConfig.Spec.HyperfleetAPI.Timeout,
+		adapterConfig.Spec.HyperfleetAPI.RetryAttempts)
 
 	// Create HyperFleet API client from config
-	// The client is stateless and safe to reuse across messages.
-	// Each API call receives the message-specific context for proper isolation.
+	log.Info("Creating HyperFleet API client...")
 	apiClient, err := createAPIClient(adapterConfig.Spec.HyperfleetAPI)
 	if err != nil {
 		log.Error(fmt.Sprintf("Failed to create HyperFleet API client: %v", err))
 		return fmt.Errorf("failed to create HyperFleet API client: %w", err)
 	}
-	log.Infof("HyperFleet API client created: baseURL=%s timeout=%s retryAttempts=%d",
-		apiClient.BaseURL(), adapterConfig.Spec.HyperfleetAPI.Timeout, adapterConfig.Spec.HyperfleetAPI.RetryAttempts)
 
+	// Create Kubernetes client
+	// Uses KUBECONFIG env var if set, otherwise uses in-cluster config
+	log.Info("Creating Kubernetes client...")
+	k8sClient, err := k8s_client.NewClient(ctx, k8s_client.ClientConfig{}, log)
+	if err != nil {
+		log.Error(fmt.Sprintf("Failed to create Kubernetes client: %v", err))
+		return fmt.Errorf("failed to create Kubernetes client: %w", err)
+	}
+
+	// Create the executor using the builder pattern
+	log.Info("Creating event executor...")
+	exec, err := executor.NewBuilder().
+		WithAdapterConfig(adapterConfig).
+		WithAPIClient(apiClient).
+		WithK8sClient(k8sClient).
+		WithLogger(log).
+		Build()
+	if err != nil {
+		log.Error(fmt.Sprintf("Failed to create executor: %v", err))
+		return fmt.Errorf("failed to create executor: %w", err)
+	}
+
+	// Create the event handler from the executor
+	// This handler will:
+	// 1. Extract params from event data
+	// 2. Execute preconditions (API calls, condition checks)
+	// 3. Create/update Kubernetes resources
+	// 4. Execute post actions (status reporting)
+	handler := exec.CreateHandler()
 
 	// Handle signals for graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -96,105 +179,101 @@ func run() error {
 		os.Exit(1)
 	}()
 
+	// Get subscription ID from environment
+	subscriptionID := os.Getenv(EnvBrokerSubscriptionID)
+	if subscriptionID == "" {
+		log.Error(fmt.Sprintf("%s environment variable is required", EnvBrokerSubscriptionID))
+		return fmt.Errorf("%s environment variable is required", EnvBrokerSubscriptionID)
+	}
+
+	// Get topic from environment
+	topic := os.Getenv(EnvBrokerTopic)
+	if topic == "" {
+		log.Error(fmt.Sprintf("%s environment variable is required", EnvBrokerTopic))
+		return fmt.Errorf("%s environment variable is required", EnvBrokerTopic)
+	}
+
 	// Create broker subscriber
-	// This will automatically read BROKER_SUBSCRIPTION_ID and broker config from env vars
-	subscriber, subscriptionID, err := broker_consumer.NewSubscriber("")
+	// Configuration is loaded from environment variables by the broker library:
+	//   - BROKER_TYPE: "rabbitmq" or "googlepubsub"
+	//   - BROKER_GOOGLEPUBSUB_PROJECT_ID: GCP project ID (for googlepubsub)
+	//   - BROKER_RABBITMQ_URL: RabbitMQ URL (for rabbitmq)
+	//   - SUBSCRIBER_PARALLELISM: number of parallel workers (default: 1)
+	log.Info("Creating broker subscriber...")
+	subscriber, err := broker.NewSubscriber(subscriptionID)
 	if err != nil {
-		log.Error(fmt.Sprintf("Failed to create subscriber: %v for subscription: %s", err, subscriptionID))
-		return err
+		log.Error(fmt.Sprintf("Failed to create subscriber: %v", err))
+		return fmt.Errorf("failed to create subscriber: %w", err)
 	}
-	if subscriber == nil {
-		log.Error(fmt.Sprintf("Subscriber is nil after creation for subscription: %s", subscriptionID))
-		return fmt.Errorf("subscriber is nil for subscription: %s", subscriptionID)
+	log.Info("Broker subscriber created successfully")
+
+	// Subscribe to topic - this is NON-BLOCKING, it returns immediately after setup
+	log.Info("Subscribing to broker topic...")
+	err = subscriber.Subscribe(ctx, topic, handler)
+	if err != nil {
+		log.Error(fmt.Sprintf("Failed to subscribe to topic: %v", err))
+		return fmt.Errorf("failed to subscribe to topic: %w", err)
 	}
+	log.Info("Successfully subscribed to broker topic")
 
-	defer func() {
-		// Use a timeout for closing to prevent hanging forever
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer closeCancel()
+	// Channel to signal fatal errors from the errors goroutine
+	fatalErrCh := make(chan error, 1)
 
-		done := make(chan struct{})
-		go func() {
-			if err := subscriber.Close(); err != nil {
-				log.Error(fmt.Sprintf("Error closing subscriber: %v", err))
+	// Monitor subscription errors channel in a separate goroutine
+	go func() {
+		for subErr := range subscriber.Errors() {
+			log.Error(fmt.Sprintf("Subscription error: %v", subErr))
+			// For critical errors, signal shutdown
+			select {
+			case fatalErrCh <- subErr:
+				// Signal sent, trigger shutdown
+			default:
+				// Channel already has an error, don't block
 			}
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			log.Info("Subscriber closed successfully")
-		case <-closeCtx.Done():
-			log.Warning("Subscriber close timed out")
 		}
 	}()
 
-	// Define event handler using the loaded adapter configuration and API client.
-	// Each message invocation receives its own context (ctx) from the broker.
-	// This ensures message isolation - cancellation or timeout of one message
-	// does not affect other messages.
-	handler := func(ctx context.Context, evt *event.Event) error {
-		// Safely render event data with nil check
-		dataStr := ""
-		if evt.Data() != nil {
-			dataStr = string(evt.Data())
-		}
-		log.Infof("Received event: id=%s type=%s source=%s data=%s", evt.ID(), evt.Type(), evt.Source(), dataStr)
+	log.Info("Adapter started, waiting for events...")
 
-		// TODO: Process event using adapterConfig and apiClient
-		// Each API call MUST use ctx (the message context) for proper isolation:
-		//   resp, err := apiClient.Get(ctx, url)  // ctx ensures per-message timeout/cancellation
-		//
-		// 1. Extract params from event data using adapterConfig.Spec.Params
-		// 2. Execute preconditions using adapterConfig.Spec.Preconditions
-		//    - Make API calls using apiClient.Get(ctx, ...)/Post(ctx, ...)/etc.
-		//    - Extract response fields and evaluate conditions
-		// 3. Create/update Kubernetes resources using adapterConfig.Spec.Resources
-		// 4. Execute post actions using adapterConfig.Spec.Post.PostActions
-		//    - Report status back to HyperFleet API using apiClient
-
-		// Reference config and client to avoid unused variable warnings
-		_ = adapterConfig
-		_ = apiClient
-
-		log.Info("Event processed successfully")
-		return nil
+	// Wait for shutdown signal or fatal subscription error
+	select {
+	case <-ctx.Done():
+		log.Info("Context cancelled, shutting down...")
+	case err := <-fatalErrCh:
+		log.Error(fmt.Sprintf("Fatal subscription error, shutting down: %v", err))
+		cancel() // Cancel context to trigger graceful shutdown
 	}
 
-	// Subscribe and block until context is cancelled
-	// Let the broker consumer determine the topic to subscribe to from BROKER_TOPIC environment variable
-	if err := broker_consumer.Subscribe(ctx, subscriber, "", handler); err != nil {
-		// Context cancellation is expected during graceful shutdown, not an error
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			log.Info("Subscription stopped due to context cancellation")
-			// Not an error - graceful shutdown
+	// Close subscriber gracefully with timeout
+	log.Info("Closing broker subscriber...")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	// Close subscriber in a goroutine with timeout
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- subscriber.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			log.Error(fmt.Sprintf("Error closing subscriber: %v", err))
 		} else {
-			// Actual error (e.g. connection failed)
-			log.Error(fmt.Sprintf("Subscription failed: %v", err))
-			return err
+			log.Info("Subscriber closed successfully")
 		}
+	case <-shutdownCtx.Done():
+		log.Error("Subscriber close timed out after 30 seconds")
 	}
 
-	log.Info("Waiting for graceful shutdown...")
-
-	// Give a small grace period for in-flight messages to complete
-	time.Sleep(time.Second)
 	log.Info("Adapter shutdown complete")
 
 	return nil
 }
 
-// createAPIClient creates a HyperFleet API client from the config.
-// Base URL resolution: config value takes precedence; if not configured,
-// NewClient falls back to HYPERFLEET_API_BASE_URL env var as a last resort.
+// createAPIClient creates a HyperFleet API client from the config
 func createAPIClient(apiConfig config_loader.HyperfleetAPIConfig) (hyperfleet_api.Client, error) {
 	var opts []hyperfleet_api.ClientOption
-
-	// Set base URL from config if explicitly configured.
-	// If not set here, NewClient will fall back to HYPERFLEET_API_BASE_URL env var.
-	if baseURL := apiConfig.GetBaseURL(); baseURL != "" {
-		opts = append(opts, hyperfleet_api.WithBaseURL(baseURL))
-	}
 
 	// Parse and set timeout using the accessor method
 	timeout, err := apiConfig.ParseTimeout()
@@ -221,7 +300,5 @@ func createAPIClient(apiConfig config_loader.HyperfleetAPIConfig) (hyperfleet_ap
 		}
 	}
 
-	// NewClient validates base URL is configured.
-	// It reads HYPERFLEET_API_BASE_URL env var as last resort if not set via options.
 	return hyperfleet_api.NewClient(opts...)
 }

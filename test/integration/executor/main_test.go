@@ -73,7 +73,7 @@ func TestMain(m *testing.M) {
 	println("🚀 Setting up shared envtest for executor tests...")
 
 	// Set up the shared environment
-	env, err := setupsharedK8sEnvtestEnv()
+	env, err := setupSharedK8sEnvtestEnv()
 	if err != nil {
 		setupErr = err
 		println("❌ Failed to set up shared environment:", err.Error())
@@ -98,8 +98,8 @@ func TestMain(m *testing.M) {
 	os.Exit(exitCode)
 }
 
-// setupsharedK8sEnvtestEnv creates the shared envtest environment for executor tests
-func setupsharedK8sEnvtestEnv() (*K8sTestEnv, error) {
+// setupSharedK8sEnvtestEnv creates the shared envtest environment for executor tests
+func setupSharedK8sEnvtestEnv() (*K8sTestEnv, error) {
 	ctx := context.Background()
 	log := logger.NewLogger(ctx)
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/config_loader"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/criteria"
@@ -33,7 +32,9 @@ func (pae *PostActionExecutor) ExecuteAll(ctx context.Context, postConfig *confi
 
 	// Step 1: Build post payloads (like clusterStatusPayload)
 	if len(postConfig.Payloads) > 0 {
+		log.Infof("  Building %d post payloads", len(postConfig.Payloads))
 		if err := buildPostPayloads(postConfig.Payloads, execCtx, log); err != nil {
+			log.Error(fmt.Sprintf("  Failed to build post payloads: %v", err))
 			execCtx.Adapter.ExecutionError = &ExecutionError{
 				Phase:   string(PhasePostActions),
 				Step:    "build_payloads",
@@ -41,16 +42,20 @@ func (pae *PostActionExecutor) ExecuteAll(ctx context.Context, postConfig *confi
 			}
 			return []PostActionResult{}, NewExecutorError(PhasePostActions, "build_payloads", "failed to build post payloads", err)
 		}
+		for _, payload := range postConfig.Payloads {
+			log.V(1).Infof("    payload[%s] built successfully", payload.Name)
+		}
 	}
 
 	// Step 2: Execute post actions (sequential - stop on first failure)
 	results := make([]PostActionResult, 0, len(postConfig.PostActions))
-	for _, action := range postConfig.PostActions {
+	for i, action := range postConfig.PostActions {
+		log.Infof("  [PostAction %d/%d] Executing: %s", i+1, len(postConfig.PostActions), action.Name)
 		result, err := pae.executePostAction(ctx, action, execCtx, log)
 		results = append(results, result)
 
 		if err != nil {
-			log.Error(fmt.Sprintf("Post action '%s' failed: %v", action.Name, err))
+			log.Error(fmt.Sprintf("  [PostAction %d/%d] %s: FAILED - %v", i+1, len(postConfig.PostActions), action.Name, err))
 			
 			// Set ExecutionError for failed post action
 			execCtx.Adapter.ExecutionError = &ExecutionError{
@@ -62,6 +67,7 @@ func (pae *PostActionExecutor) ExecuteAll(ctx context.Context, postConfig *confi
 			// Stop execution - don't run remaining post actions
 			return results, err
 		}
+		log.Infof("  [PostAction %d/%d] %s: SUCCESS ✓", i+1, len(postConfig.PostActions), action.Name)
 	}
 
 	return results, nil
@@ -70,11 +76,9 @@ func (pae *PostActionExecutor) ExecuteAll(ctx context.Context, postConfig *confi
 // buildPostPayloads builds all post payloads and stores them in execCtx.Params
 // Payloads are complex structures built from CEL expressions and templates
 func buildPostPayloads(payloads []config_loader.Payload, execCtx *ExecutionContext, log logger.Logger) error {
-	// Create evaluation context with all params for CEL expressions
+	// Create evaluation context with all CEL variables (params, adapter, resources)
 	evalCtx := criteria.NewEvaluationContext()
-	evalCtx.SetVariablesFromMap(execCtx.Params)
-	// Add adapter metadata for CEL expressions (convert to map)
-	evalCtx.Set("adapter", adapterMetadataToMap(&execCtx.Adapter))
+	evalCtx.SetVariablesFromMap(execCtx.GetCELVariables())
 
 	evaluator := criteria.NewEvaluator(evalCtx, log)
 
@@ -150,26 +154,12 @@ func processValue(v any, evaluator *criteria.Evaluator, params map[string]any, l
 	switch val := v.(type) {
 	case map[string]any:
 		// Check if this is an expression definition
-		if expr, ok := val["expression"].(string); ok {
-			// Evaluate CEL expression
-			result, err := evaluator.EvaluateCEL(strings.TrimSpace(expr))
-			if err != nil {
-				log.Error(fmt.Sprintf("failed to evaluate CEL expression '%s': %v", expr, err))
-				return nil, err
-			}
-			if result.HasError() {
-				// result Error recorded the eval error reason, like key not exists, etc.
-				// just log the error reason for debugging, it's expected when resource is not created yet.
-				// like resources.cluster.status.phase == "Running", when status not exist in cluster object yet
-				// there will be error "no such key: cluster.status"
-				// log it as debug info, not an error for further processing
-				log.V(2).Infof("CEL expression evaluation failed: %v", result.ErrorReason)
-			}
-			return result.Value, nil
+		if result, ok := evaluator.EvaluateExpressionDef(val); ok {
+			return result, nil
 		}
 		
 		// Check if this is a simple value definition
-		if value, ok := val["value"]; ok {
+		if value, ok := criteria.GetValueDef(val); ok {
 			// Render template if it's a string
 			if strVal, ok := value.(string); ok {
 				return renderTemplate(strVal, params)
@@ -210,8 +200,6 @@ func (pae *PostActionExecutor) executePostAction(ctx context.Context, action con
 		Status: StatusSuccess,
 	}
 
-	log.Infof("Executing post action: %s", action.Name)
-
 	// Execute log action if configured
 	if action.Log != nil {
 		ExecuteLogAction(action.Log, execCtx, log)
@@ -219,12 +207,12 @@ func (pae *PostActionExecutor) executePostAction(ctx context.Context, action con
 
 	// Execute API call if configured
 	if action.APICall != nil {
+		log.Infof("    Making API call: %s %s", action.APICall.Method, action.APICall.URL)
 		if err := pae.executeAPICall(ctx, action.APICall, execCtx, &result, log); err != nil {
 			return result, err
 		}
+		log.Infof("    API call successful: HTTP %d", result.HTTPStatus)
 	}
-
-	log.Infof("Post action '%s' completed", action.Name)
 
 	return result, nil
 }

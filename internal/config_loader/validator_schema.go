@@ -122,6 +122,15 @@ func (v *SchemaValidator) validateParams() error {
 		if param.Source == "" {
 			return fmt.Errorf("%s (%s): %s is required", path, param.Name, FieldSource)
 		}
+
+		// Validate required env params have values
+		if param.Required && strings.HasPrefix(param.Source, "env.") {
+			envName := strings.TrimPrefix(param.Source, "env.")
+			envValue := os.Getenv(envName)
+			if envValue == "" && param.Default == nil {
+				return fmt.Errorf("%s (%s): required environment variable %s is not set", path, param.Name, envName)
+			}
+		}
 	}
 	return nil
 }
@@ -187,10 +196,7 @@ func (v *SchemaValidator) validateResourceDiscovery(resource *Resource, path str
 		return fmt.Errorf("%s (%s): %s is required to find the resource on subsequent messages", path, resource.Name, FieldDiscovery)
 	}
 
-	// Namespace must be set ("*" means all namespaces)
-	if resource.Discovery.Namespace == "" {
-		return fmt.Errorf("%s (%s): %s.%s is required (use \"*\" for all namespaces)", path, resource.Name, FieldDiscovery, FieldNamespace)
-	}
+	// Namespace is optional - empty or "*" means all namespaces
 
 	// Either byName or bySelectors must be configured
 	hasByName := resource.Discovery.ByName != ""

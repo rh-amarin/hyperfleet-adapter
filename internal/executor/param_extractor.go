@@ -18,17 +18,17 @@ func extractConfigParams(config *config_loader.AdapterConfig, execCtx *Execution
 		if err != nil {
 			if param.Required {
 				return NewExecutorError(PhaseParamExtraction, param.Name,
-					fmt.Sprintf("failed to extract required parameter: %s", param.Source), err)
+					fmt.Sprintf("failed to extract required parameter '%s' from source '%s'", param.Name, param.Source), err)
 			}
-			// Use default for non-required params
+			// Use default for non-required params if extraction fails
 			if param.Default != nil {
 				execCtx.Params[param.Name] = param.Default
 			}
 			continue
 		}
 
-		// Apply default if value is nil
-		if value == nil && param.Default != nil {
+		// Apply default if value is nil or empty string
+		if (value == nil || value == "") && param.Default != nil {
 			value = param.Default
 		}
 

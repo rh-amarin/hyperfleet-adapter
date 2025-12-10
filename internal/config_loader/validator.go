@@ -349,6 +349,11 @@ func (v *Validator) initCELEnv() error {
 		options = append(options, cel.Variable(FieldResources, cel.MapType(cel.StringType, cel.DynType)))
 	}
 
+	// Always add "adapter" as a map for adapter metadata lookups like adapter.executionStatus
+	if !addedRoots[FieldAdapter] {
+		options = append(options, cel.Variable(FieldAdapter, cel.MapType(cel.StringType, cel.DynType)))
+	}
+
 	env, err := cel.NewEnv(options...)
 	if err != nil {
 		return err

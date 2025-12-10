@@ -38,6 +38,9 @@ func getProjectRoot() string {
 // TestLoadTemplateConfig tests loading the actual adapter-config-template.yaml
 // This is an integration test that validates the shipped template configuration.
 func TestLoadTemplateConfig(t *testing.T) {
+	// Set required environment variables for the template config
+	t.Setenv("HYPERFLEET_API_BASE_URL", "http://test-api.example.com")
+
 	projectRoot := getProjectRoot()
 	configPath := filepath.Join(projectRoot, "configs/adapter-config-template.yaml")
 
@@ -52,7 +55,7 @@ func TestLoadTemplateConfig(t *testing.T) {
 	assert.Equal(t, "hyperfleet-system", config.Metadata.Namespace)
 
 	// Verify adapter info
-	assert.Equal(t, "0.0.1", config.Spec.Adapter.Version)
+	assert.Equal(t, "0.1.0", config.Spec.Adapter.Version)
 
 	// Verify HyperFleet API config
 	assert.Equal(t, "2s", config.Spec.HyperfleetAPI.Timeout)
@@ -61,12 +64,12 @@ func TestLoadTemplateConfig(t *testing.T) {
 
 	// Verify params exist
 	assert.NotEmpty(t, config.Spec.Params)
-	assert.GreaterOrEqual(t, len(config.Spec.Params), 5, "should have at least 5 parameters")
+	assert.GreaterOrEqual(t, len(config.Spec.Params), 3, "should have at least 3 parameters")
 
 	// Check specific params (using accessor method)
 	clusterIdParam := config.GetParamByName("clusterId")
 	require.NotNil(t, clusterIdParam, "clusterId parameter should exist")
-	assert.Equal(t, "event.cluster_id", clusterIdParam.Source)
+	assert.Equal(t, "event.id", clusterIdParam.Source)
 	assert.True(t, clusterIdParam.Required)
 
 	// Verify preconditions
@@ -84,13 +87,13 @@ func TestLoadTemplateConfig(t *testing.T) {
 	// Verify captured fields
 	clusterNameCapture := findCaptureByName(firstPrecond.Capture, "clusterName")
 	require.NotNil(t, clusterNameCapture)
-	assert.Equal(t, "metadata.name", clusterNameCapture.Field)
+	assert.Equal(t, "name", clusterNameCapture.Field)
 
 	// Verify conditions in precondition
 	assert.GreaterOrEqual(t, len(firstPrecond.Conditions), 1)
 	firstCondition := firstPrecond.Conditions[0]
 	assert.Equal(t, "clusterPhase", firstCondition.Field)
-	assert.Equal(t, "in", firstCondition.Operator)
+	assert.Equal(t, "equals", firstCondition.Operator)
 
 	// Verify resources
 	assert.NotEmpty(t, config.Spec.Resources)
@@ -121,6 +124,9 @@ func TestLoadTemplateConfig(t *testing.T) {
 
 // TestLoadValidTestConfig tests loading the valid test config
 func TestLoadValidTestConfig(t *testing.T) {
+	// Set required environment variables for the test config
+	t.Setenv("HYPERFLEET_API_BASE_URL", "http://test-api.example.com")
+
 	projectRoot := getProjectRoot()
 	configPath := filepath.Join(projectRoot, "test/testdata/adapter_config_valid.yaml")
 

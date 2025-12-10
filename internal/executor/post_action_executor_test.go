@@ -26,6 +26,7 @@ func (l *testLogger) Info(message string)                               {}
 func (l *testLogger) Warning(message string)                            {}
 func (l *testLogger) Error(message string)                              {}
 func (l *testLogger) Fatal(message string)                              {}
+func (l *testLogger) Flush()                                            {}
 
 func TestBuildPayload(t *testing.T) {
 	log := &testLogger{}

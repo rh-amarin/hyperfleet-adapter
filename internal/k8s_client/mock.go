@@ -54,7 +54,7 @@ func (m *MockK8sClient) GetResource(ctx context.Context, gvk schema.GroupVersion
 		return res, nil
 	}
 	// Resource not found - return proper K8s NotFound error (matches real client behavior)
-	gr := schema.GroupResource{Group: gvk.Group, Resource: gvk.Kind}
+	gr := schema.GroupResource{Group: gvk.Group, Resource: gvk.Kind + "s"}
 	return nil, apierrors.NewNotFound(gr, name)
 }
 

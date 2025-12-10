@@ -25,8 +25,9 @@ metadata:
     hyperfleet.io/adapter-type: test
 spec:
   adapter:
-    version: "0.0.1"
+    version: "0.1.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 2s
     retryAttempts: 3
     retryBackoff: exponential
@@ -67,7 +68,7 @@ spec:
 	assert.Equal(t, "AdapterConfig", config.Kind)
 	assert.Equal(t, "test-adapter", config.Metadata.Name)
 	assert.Equal(t, "hyperfleet-system", config.Metadata.Namespace)
-	assert.Equal(t, "0.0.1", config.Spec.Adapter.Version)
+	assert.Equal(t, "0.1.0", config.Spec.Adapter.Version)
 }
 
 func TestLoadInvalidPath(t *testing.T) {
@@ -95,6 +96,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -191,6 +193,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -212,6 +215,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -232,6 +236,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -278,6 +283,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -300,6 +306,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -322,6 +329,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -342,6 +350,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -364,6 +373,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -412,6 +422,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -439,6 +450,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -461,6 +473,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -498,6 +511,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -532,6 +546,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -577,6 +592,7 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
@@ -872,8 +888,9 @@ metadata:
   name: test-adapter
 spec:
   adapter:
-    version: "0.0.1"
+    version: "0.1.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 2s
   kubernetes:
     apiVersion: "v1"
@@ -912,8 +929,9 @@ metadata:
   name: test-adapter
 spec:
   adapter:
-    version: "0.0.1"
+    version: "0.1.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 2s
   kubernetes:
     apiVersion: "v1"
@@ -978,8 +996,9 @@ metadata:
   name: test-adapter
 spec:
   adapter:
-    version: "0.0.1"
+    version: "0.1.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 2s
   kubernetes:
     apiVersion: "v1"
@@ -1130,7 +1149,7 @@ func TestValidateResourceDiscovery(t *testing.T) {
 			errMsg:  "discovery is required",
 		},
 		{
-			name: "invalid - manifest.ref missing discovery.namespace",
+			name: "valid - manifest.ref with discovery missing namespace (all namespaces)",
 			config: &AdapterConfig{
 				Spec: AdapterConfigSpec{
 					Resources: []Resource{
@@ -1138,15 +1157,14 @@ func TestValidateResourceDiscovery(t *testing.T) {
 							Name:     "test",
 							Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
 							Discovery: &DiscoveryConfig{
-								// Missing namespace
+								// Empty namespace means all namespaces
 								ByName: "my-resource",
 							},
 						},
 					},
 				},
 			},
-			wantErr: true,
-			errMsg:  "discovery.namespace is required",
+			wantErr: false,
 		},
 		{
 			name: "invalid - manifest.ref missing byName or bySelectors",
@@ -1254,8 +1272,9 @@ metadata:
   name: test-adapter
 spec:
   adapter:
-    version: "0.0.1"
+    version: "0.1.0"
   hyperfleetApi:
+    baseUrl: "https://test.example.com"
     timeout: 2s
   kubernetes:
     apiVersion: "v1"

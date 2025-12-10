@@ -48,7 +48,7 @@ metadata:
   namespace: hyperfleet-system
 spec:
   adapter:
-    version: "0.0.1"
+    version: "0.1.0"
   hyperfleetApi:
     timeout: 2s
     retryAttempts: 3

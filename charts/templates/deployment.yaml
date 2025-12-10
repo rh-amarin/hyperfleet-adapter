@@ -105,7 +105,6 @@ spec:
             {{- end }}
             {{- end }}
             {{- if .Values.hyperfleetApi.baseUrl }}
-            # HyperFleet API configuration
             - name: HYPERFLEET_API_BASE_URL
               value: {{ .Values.hyperfleetApi.baseUrl | quote }}
             {{- end }}
@@ -115,7 +114,6 @@ spec:
             {{- end }}
             {{- if .Values.config.enabled }}
             {{- if .Values.config.env }}
-            # Environment variables from adapter ConfigMap
             {{- range $key, $value := .Values.config.env }}
             - name: {{ $key }}
               valueFrom:
@@ -132,27 +130,22 @@ spec:
                   key: ADAPTER_TYPE
             {{- end }}
             {{- if .Values.config.adapterYaml }}
-            # Adapter config file path (adapter.yaml is mounted from ConfigMap)
             - name: ADAPTER_CONFIG_PATH
               value: /etc/adapter/adapter.yaml
             {{- end }}
             {{- end }}
             {{- if $brokerEnabled }}
             {{- if .Values.broker.yaml }}
-            # Broker config file path (broker.yaml is mounted from ConfigMap)
             - name: BROKER_CONFIG_FILE
               value: /etc/broker/broker.yaml
             {{- end }}
-            {{- if .Values.broker.mountAsEnv }}
-            {{- if .Values.broker.envKeys }}
-            # Broker configuration from broker ConfigMap as environment variables
+            {{- if and .Values.broker.mountAsEnv .Values.broker.envKeys }}
             {{- range .Values.broker.envKeys }}
             - name: {{ . }}
               valueFrom:
                 configMapKeyRef:
                   name: {{ include "hyperfleet-adapter.brokerConfigMapName" $ }}
                   key: {{ . }}
-            {{- end }}
             {{- end }}
             {{- end }}
             {{- end }}
@@ -164,7 +157,6 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
             {{- if and $brokerEnabled .Values.broker.mountAsEnv (not .Values.broker.envKeys) }}
-            # Mount entire broker ConfigMap as environment variables
             - configMapRef:
                 name: {{ include "hyperfleet-adapter.brokerConfigMapName" . }}
             {{- end }}
@@ -261,15 +253,12 @@ spec:
           {{- if $hasVolumeMounts }}
           volumeMounts:
             {{- if and .Values.config.enabled .Values.config.adapterYaml }}
-            # Mount adapter.yaml from ConfigMap
             - name: adapter-config
               mountPath: /etc/adapter/adapter.yaml
               subPath: adapter.yaml
               readOnly: true
             {{- end }}
-            {{- $brokerEnabled := or .Values.broker.create .Values.broker.configMapName }}
             {{- if and $brokerEnabled .Values.broker.yaml }}
-            # Mount broker.yaml from ConfigMap
             - name: broker-config
               mountPath: /etc/broker/broker.yaml
               subPath: broker.yaml

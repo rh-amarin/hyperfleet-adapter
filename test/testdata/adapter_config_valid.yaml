@@ -11,7 +11,7 @@ metadata:
 
 spec:
   adapter:
-    version: "0.0.1"
+    version: "0.1.0"
   
   hyperfleetApi:
     timeout: 2s
@@ -32,11 +32,6 @@ spec:
       source: "env.HYPERFLEET_API_VERSION"
       type: "string"
       default: "v1"
-
-    - name: "hyperfleetApiToken"
-      source: "env.HYPERFLEET_API_TOKEN"
-      type: "string"
-      required: true
 
     - name: "clusterId"
       source: "event.cluster_id"
@@ -189,8 +184,6 @@ spec:
           method: "POST"
           url: "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/status"
           headers:
-            - name: "Authorization"
-              value: "Bearer {{ .hyperfleetApiToken }}"
             - name: "Content-Type"
               value: "application/json"
           body: "{{ .clusterStatusPayload }}"

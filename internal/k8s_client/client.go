@@ -3,6 +3,7 @@ package k8s_client
 import (
 	"context"
 	"encoding/json"
+	"os"
 
 	apperrors "github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/errors"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
@@ -16,6 +17,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// EnvKubeConfig is the environment variable for kubeconfig path
+const EnvKubeConfig = "KUBECONFIG"
+
 // Client is the Kubernetes client for managing resources using controller-runtime
 type Client struct {
 	client client.Client
@@ -25,8 +29,7 @@ type Client struct {
 // ClientConfig holds configuration for creating a Kubernetes client
 type ClientConfig struct {
 	// KubeConfigPath is the path to kubeconfig file
-	// Leave empty ("") to use in-cluster ServiceAccount authentication
-	// Set to a path for local development or external cluster access
+	// If empty, checks KUBECONFIG env var, then falls back to in-cluster config
 	KubeConfigPath string
 	// QPS is the queries per second rate limiter
 	QPS float32
@@ -36,43 +39,48 @@ type ClientConfig struct {
 
 // NewClient creates a new Kubernetes client with automatic authentication detection
 //
-// Authentication Methods:
-//   1. In-Cluster (ServiceAccount) - When KubeConfigPath is empty ("")
-//      - Uses ServiceAccount token mounted at /var/run/secrets/kubernetes.io/serviceaccount/token
-//      - Uses CA certificate at /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-//      - Automatically configured when running in a Kubernetes pod
-//      - Requires appropriate RBAC permissions for the ServiceAccount
-//
-//   2. Kubeconfig - When KubeConfigPath is set
-//      - Uses the specified kubeconfig file for authentication
-//      - Suitable for local development or accessing remote clusters
+// Authentication Methods (in order of priority):
+//  1. KubeConfigPath - If explicitly set in ClientConfig
+//  2. KUBECONFIG env var - If KubeConfigPath is empty but env var is set
+//  3. In-Cluster (ServiceAccount) - If neither above is set
+//     - Uses ServiceAccount token mounted at /var/run/secrets/kubernetes.io/serviceaccount/token
+//     - Uses CA certificate at /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+//     - Automatically configured when running in a Kubernetes pod
+//     - Requires appropriate RBAC permissions for the ServiceAccount
 //
 // Example Usage:
-//   // For production deployment in K8s cluster (uses ServiceAccount)
-//   config := ClientConfig{KubeConfigPath: "", QPS: 100.0, Burst: 200}
-//   client, err := NewClient(ctx, config, log)
 //
-//   // For local development (uses kubeconfig)
-//   config := ClientConfig{KubeConfigPath: "/home/user/.kube/config"}
-//   client, err := NewClient(ctx, config, log)
+//	// For production deployment in K8s cluster (uses ServiceAccount)
+//	config := ClientConfig{QPS: 100.0, Burst: 200}
+//	client, err := NewClient(ctx, config, log)
+//
+//	// For local development (uses KUBECONFIG env var or explicit path)
+//	config := ClientConfig{KubeConfigPath: "/home/user/.kube/config"}
+//	client, err := NewClient(ctx, config, log)
 func NewClient(ctx context.Context, config ClientConfig, log logger.Logger) (*Client, error) {
 	var restConfig *rest.Config
 	var err error
 
-	if config.KubeConfigPath == "" {
+	// Resolve kubeconfig path: explicit config > KUBECONFIG env var
+	kubeConfigPath := config.KubeConfigPath
+	if kubeConfigPath == "" {
+		kubeConfigPath = os.Getenv(EnvKubeConfig)
+	}
+
+	if kubeConfigPath != "" {
+		// Use kubeconfig file for local development or remote access
+		restConfig, err = clientcmd.BuildConfigFromFlags("", kubeConfigPath)
+		if err != nil {
+			return nil, apperrors.KubernetesError("failed to load kubeconfig from %s: %v", kubeConfigPath, err)
+		}
+		log.Infof("Using kubeconfig from: %s", kubeConfigPath)
+	} else {
 		// Use in-cluster config with ServiceAccount
 		restConfig, err = rest.InClusterConfig()
 		if err != nil {
 			return nil, apperrors.KubernetesError("failed to create in-cluster config: %v", err)
 		}
 		log.Info("Using in-cluster Kubernetes configuration (ServiceAccount)")
-	} else {
-		// Use kubeconfig file for local development or remote access
-		restConfig, err = clientcmd.BuildConfigFromFlags("", config.KubeConfigPath)
-		if err != nil {
-			return nil, apperrors.KubernetesError("failed to load kubeconfig from %s: %v", config.KubeConfigPath, err)
-		}
-		log.Infof("Using kubeconfig from: %s", config.KubeConfigPath)
 	}
 
 	// Set rate limits

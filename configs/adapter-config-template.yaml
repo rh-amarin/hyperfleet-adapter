@@ -25,6 +25,12 @@
 #
 # Supported operators: equals, notEquals, in, notIn, contains, greaterThan, lessThan, exists
 #
+# CEL OPTIONAL CHAINING:
+# ======================
+# Use optional chaining with orValue() to safely access potentially missing fields:
+#   resources.?clusterNamespace.?status.?phase.orValue("")
+#   adapter.?executionStatus.orValue("")
+#
 # Copy this file to your adapter repository and customize for your needs.
 
 apiVersion: hyperfleet.redhat.com/v1alpha1
@@ -44,7 +50,7 @@ spec:
   # Adapter Information
   adapter:
     # Adapter version
-    version: "0.0.1"
+    version: "0.1.0"
   
   # ============================================================================
   # HyperFleet API Configuration
@@ -80,45 +86,14 @@ spec:
       type: "string"
       default: "v1"
       description: "API version to use"
-      required: true
     
     # Extract from CloudEvent data
     - name: "clusterId"
-      source: "event.cluster_id"
+      source: "event.id"
       type: "string"
       description: "Unique identifier for the target cluster"
       required: true
     
-    - name: "resourceId"
-      source: "event.resource_id"
-      type: "string"
-      description: "Unique identifier for the resource"
-      required: true
-    
-    - name: "resourceType"
-      source: "event.resource_type"
-      type: "string"
-      description: "Type of the resource being managed"
-      required: true
-    
-    - name: "eventGenerationId"
-      source: "event.generation"
-      type: "string"
-      description: "Event generation ID for idempotency checks"
-      required: true
-
-    - name: "eventHref"
-      source: "event.href"
-      type: "string"
-      description: "Reference URL for the resource"
-      required: true
-
-    - name: "imageTag"
-      source: "env.IMAGE_TAG"
-      type: "string"
-      default: "v1.0.0"
-      description: "Tag for container images"
-      required: false
 
   # ============================================================================
   # Global Preconditions
@@ -131,54 +106,26 @@ spec:
     - name: "clusterStatus"
       apiCall:
         method: "GET"
-        url: "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}"
+        # NOTE: API path includes /api/hyperfleet/ prefix
+        url: "{{ .hyperfleetApiBaseUrl }}/api/hyperfleet/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}"
         timeout: 10s
         retryAttempts: 3
         retryBackoff: "exponential"
       # Capture fields from the API response. Captured values become variables for use in resources section.
       capture:
         - name: "clusterName"
-          field: "metadata.name"
+          field: "name"
         - name: "clusterPhase"
           field: "status.phase"
-        - name: "region"
-          field: "spec.region"
-        - name: "cloudProvider"
-          field: "spec.provider"
-        - name: "vpcId"
-          field: "spec.vpc_id"
-        - name: "nodeCount"
-          field: "spec.node_count"
+        - name: "generationId"
+          field: "generation"
       conditions:
         - field: "clusterPhase"
-          operator: "in"
-          value: ["Provisioning", "Installing", "Ready"]
-        - field: "cloudProvider"
-          operator: "in"
-          value: ["aws", "gcp", "azure"]
-        - field: "vpcId"
-          operator: "exists"
-
-    # ==========================================================================
-    # Step 2: Check validation availability
-    # ==========================================================================
-    - name: "validationAvailability"
-      apiCall:
-        method: "GET"
-        url: "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/validation/availability"
-        timeout: 10s
-        retryAttempts: 3
-        retryBackoff: "exponential"
-      capture:
-        - name: "availabilityStatus"
-          field: "status"
-      expression: |
-        availabilityStatus == "available"
+          operator: "equals"
+          value: "NotReady"
   
   # ============================================================================
-  # Resources (Create/Update Resources). 
-  # This is just a fake template for the resources structure that will be created/updated . 
-  # In a real adapter, you would define the resources here. but not exactly the same
+  # Resources (Create/Update Resources)
   # ============================================================================
   # All resources are created/updated sequentially in the order defined below
   resources:
@@ -190,84 +137,24 @@ spec:
         apiVersion: v1
         kind: Namespace
         metadata:
-          name: "cluster-{{ .clusterId }}"
+          # Use | lower to ensure valid K8s resource name (lowercase RFC 1123)
+          name: "{{ .clusterId | lower }}"
           labels:
             hyperfleet.io/cluster-id: "{{ .clusterId }}"
-            hyperfleet.io/cluster-name: "{{ .clusterName }}"
-            hyperfleet.io/region: "{{ .region }}"
-            hyperfleet.io/provider: "{{ .cloudProvider }}"
             hyperfleet.io/managed-by: "{{ .metadata.name }}"
             hyperfleet.io/resource-type: "namespace"
           annotations:
-            hyperfleet.io/vpc-id: "{{ .vpcId }}"
             hyperfleet.io/created-by: "hyperfleet-adapter"
-            hyperfleet.io/generation: "{{ .eventGenerationId }}"
-            hyperfleet.io/resource-href: "{{ .eventHref }}"
-        spec:
-          finalizers:
-            - "hyperfleet.io/cluster-finalizer"
+            hyperfleet.io/generation: "{{ .generationId }}"
       discovery:
-        namespace: "cluster-{{ .clusterId }}"
+        # The "namespace" field within discovery is optional:
+        # - For namespaced resources: set namespace to target the specific namespace
+        # - For cluster-scoped resources (like Namespace, ClusterRole): omit or leave empty
+        # Here we omit it since Namespace is cluster-scoped
         bySelectors:
           labelSelector:
-            hyperfleet.io/cluster-id: "{{ .clusterId }}"
             hyperfleet.io/resource-type: "namespace"
-            hyperfleet.io/managed-by: "{{ .metadata.name }}"
-
-    # ==========================================================================
-    # Resource 2: ConfigMap
-    # ==========================================================================
-    - name: "clusterConfigMap"
-      manifest:
-        apiVersion: v1
-        kind: ConfigMap
-        metadata:
-          name: "cluster-config-{{ .clusterId }}"
-          namespace: "cluster-{{ .clusterId }}"
-          labels:
             hyperfleet.io/cluster-id: "{{ .clusterId }}"
-            hyperfleet.io/resource-type: "configmap"
-            hyperfleet.io/managed-by: "{{ .metadata.name }}"
-        data:
-          cluster.yaml: |
-            clusterId: "{{ .clusterId }}"
-            clusterName: "{{ .clusterName }}"
-            region: "{{ .region }}"
-            provider: "{{ .cloudProvider }}"
-            vpcId: "{{ .vpcId }}"
-            apiEndpoint: "{{ .hyperfleetApiBaseUrl }}"
-      discovery:
-        namespace: "cluster-{{ .clusterId }}"
-        bySelectors:
-          labelSelector:
-            hyperfleet.io/cluster-id: "{{ .clusterId }}"
-            hyperfleet.io/resource-type: "configmap"
-    # ==========================================================================
-    # Resource 3: Validation Job
-    # ==========================================================================
-    - name: "validationJob"
-      recreateOnChange: true # Recreate the job if the generationId changes
-      manifest:
-        ref: "templates/job.yaml"
-      discovery:
-        namespace: "cluster-{{ .clusterId }}"
-        bySelectors:
-          labelSelector:
-            hyperfleet.io/cluster-id: "{{ .clusterId }}"
-            hyperfleet.io/resource-type: "job"
-            hyperfleet.io/managed-by: "{{ .metadata.name }}"
-    # ==========================================================================
-    # Resource 4: Deployment
-    # ==========================================================================
-    - name: "clusterController"
-      manifest:
-        ref: "templates/deployment.yaml"
-      discovery:
-        namespace: "cluster-{{ .clusterId }}"
-        bySelectors:
-          labelSelector:
-            hyperfleet.io/cluster-id: "{{ .clusterId }}"
-            hyperfleet.io/resource-type: "controller"
             hyperfleet.io/managed-by: "{{ .metadata.name }}"
 
 
@@ -279,76 +166,69 @@ spec:
       # Build status payload inline
       - name: "clusterStatusPayload"
         build:
+          # Adapter name for tracking which adapter reported this status
+          adapter: "{{ .metadata.name }}"
+          
+          # Conditions array - each condition has type, status, reason, message
+          # Use CEL optional chaining ?.orValue() for safe field access
           conditions:
             # Applied: Resources successfully created
-            applied:
+            - type: "Applied"
               status:
                 expression: |
-                  resources.clusterNamespace.status.phase == "Active" &&
-                  resources.clusterController.status.conditions.filter(c, c.type == 'Available')[0].status == "True"
+                  resources.?clusterNamespace.?status.?phase.orValue("") == "Active" ? "True" : "False"
               reason:
                 expression: |
-                  has(resources.clusterController.status.conditions.filter(c, c.type == 'Available')[0].reason)
-                    ? resources.clusterController.status.conditions.filter(c, c.type == 'Available')[0].reason
-                    : "ResourcesCreated"
+                  resources.?clusterNamespace.?status.?phase.orValue("") == "Active"
+                    ? "NamespaceCreated"
+                    : "NamespacePending"
               message:
                 expression: |
-                  has(resources.clusterController.status.conditions.filter(c, c.type == 'Available')[0].message)
-                    ? resources.clusterController.status.conditions.filter(c, c.type == 'Available')[0].message
-                    : "All Kubernetes resources created successfully"
+                  resources.?clusterNamespace.?status.?phase.orValue("") == "Active"
+                    ? "Namespace created successfully"
+                    : "Namespace creation in progress"
 
-            # Available: Deployment ready and serving
-            available:
+            # Available: Resources are active and ready
+            - type: "Available"
               status:
                 expression: |
-                  resources.clusterController.status.readyReplicas > 0 &&
-                  resources.clusterController.status.replicas == resources.clusterController.status.readyReplicas
+                  resources.?clusterNamespace.?status.?phase.orValue("") == "Active" ? "True" : "False"
               reason:
                 expression: |
-                  has(resources.clusterController.status.conditions.filter(c, c.type == 'Available')[0].reason)
-                    ? resources.clusterController.status.conditions.filter(c, c.type == 'Available')[0].reason
-                    : "DeploymentReady"
+                  resources.?clusterNamespace.?status.?phase.orValue("") == "Active" ? "NamespaceReady" : "NamespaceNotReady"
               message:
                 expression: |
-                  has(resources.clusterController.status.conditions.filter(c, c.type == 'Available')[0].message)
-                    ? resources.clusterController.status.conditions.filter(c, c.type == 'Available')[0].message
-                    : "Deployment is available and serving traffic"
+                  resources.?clusterNamespace.?status.?phase.orValue("") == "Active" ? "Namespace is active and ready" : "Namespace is not active and ready"
 
-            # Health: Adapter execution status (runtime)
-            health:
+            # Health: Adapter execution status (runtime) Don't need to update this. This can be reused from the adapter config.
+            - type: "Health"
               status:
                 expression: |
-                  adapter.executionStatus == "success"
+                  adapter.?executionStatus.orValue("") == "success" ? "True" : (adapter.?executionStatus.orValue("") == "failed" ? "False" : "Unknown")
               reason:
                 expression: |
-                  has(adapter.errorReason) ? adapter.errorReason : "Healthy"
+                  adapter.?errorReason.orValue("") != "" ? adapter.?errorReason.orValue("") : "Healthy"
               message:
                 expression: |
-                  has(adapter.errorMessage) ? adapter.errorMessage : "All adapter operations completed successfully"
+                  adapter.?errorMessage.orValue("") != "" ? adapter.?errorMessage.orValue("") : "All adapter operations completed successfully"
           
-          # Extract additional data
-          data:
-            readyReplicas:
-              expression: |
-                has(resources.clusterController) &&
-                has(resources.clusterController.status) &&
-                has(resources.clusterController.status.readyReplicas)
-                  ? resources.clusterController.status.readyReplicas
-                  : 0
-              description: "Number of ready replicas"
-          
-          # Metadata fields
+          # Use CEL expression for numeric fields to preserve type (not Go template which outputs strings)
           observed_generation:
-            value: "{{ .eventGenerationId }}"
-            description: "Event generation that was processed"
+            expression: "generationId"
             
-          lastUpdated:
+          # Use Go template with now and date functions for timestamps
+          observed_time:
             value: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
-            description: "Timestamp when status was reported"
-      
-      # Build status payload from external template reference
-      - name: "clusterStatusPayloadRef"
-        buildRef: "templates/cluster-status-payload.yaml"
+
+          # Optional data field for adapter-specific metrics extracted from resources
+          data:
+            namespace:
+              name:
+                expression: |
+                  resources.?clusterNamespace.?metadata.?name.orValue("")
+              status:
+                expression: |
+                  resources.?clusterNamespace.?status.?phase.orValue("")
 
     # ============================================================================
     # Post Actions
@@ -359,7 +239,8 @@ spec:
       - name: "reportClusterStatus"
         apiCall:
           method: "POST"
-          url: "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/status"
+          # NOTE: API path includes /api/hyperfleet/ prefix and ends with /statuses
+          url: "{{ .hyperfleetApiBaseUrl }}/api/hyperfleet/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/statuses"
           body: "{{ .clusterStatusPayload }}"
           timeout: 30s
           retryAttempts: 3

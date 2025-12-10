@@ -2,7 +2,7 @@
 
 # Project metadata
 PROJECT_NAME := hyperfleet-adapter
-VERSION ?= 0.0.1
+VERSION ?= 0.1.0
 IMAGE_REGISTRY ?= quay.io/openshift-hyperfleet
 IMAGE_TAG ?= latest
 
@@ -162,7 +162,7 @@ ifeq ($(CONTAINER_RUNTIME),none)
 	@exit 1
 else
 	@echo "Building container image with $(CONTAINER_RUNTIME)..."
-	$(CONTAINER_CMD) build -t $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG) .
+	$(CONTAINER_CMD) build --platform linux/amd64 --no-cache -t $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG) .
 	@echo "✅ Image built: $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG)"
 endif
 
@@ -194,12 +194,75 @@ ifeq ($(CONTAINER_RUNTIME),none)
 	@exit 1
 else
 	@echo "Building dev image quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG)..."
-	$(CONTAINER_CMD) build -t quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG) .
+	$(CONTAINER_CMD) build --platform linux/amd64 -t quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG) .
 	@echo "Pushing dev image..."
 	$(CONTAINER_CMD) push quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG)
 	@echo ""
 	@echo "✅ Dev image pushed: quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG)"
 endif
+
+.PHONY: test-helm
+test-helm: ## 📊 Test Helm charts (lint, template, validate)
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "Testing Helm charts..."
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@if ! command -v helm > /dev/null; then \
+		echo "❌ ERROR: helm not found. Please install Helm:"; \
+		echo "  brew install helm  # macOS"; \
+		echo "  curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash  # Linux"; \
+		exit 1; \
+	fi
+	@echo "📋 Linting Helm chart..."
+	helm lint charts/
+	@echo ""
+	@echo "📋 Testing template rendering with default values..."
+	helm template test-release charts/ > /dev/null
+	@echo "✅ Default values template OK"
+	@echo ""
+	@echo "📋 Testing template with broker enabled..."
+	helm template test-release charts/ \
+		--set broker.create=true \
+		--set broker.subscriptionId=test-sub \
+		--set broker.topic=test-topic \
+		--set broker.type=googlepubsub > /dev/null
+	@echo "✅ Broker config template OK"
+	@echo ""
+	@echo "📋 Testing template with HyperFleet API config..."
+	helm template test-release charts/ \
+		--set hyperfleetApi.baseUrl=http://localhost:8000 \
+		--set hyperfleetApi.version=v1 > /dev/null
+	@echo "✅ HyperFleet API config template OK"
+	@echo ""
+	@echo "📋 Testing template with PDB enabled..."
+	helm template test-release charts/ \
+		--set podDisruptionBudget.enabled=true \
+		--set podDisruptionBudget.minAvailable=1 > /dev/null
+	@echo "✅ PDB config template OK"
+	@echo ""
+	@echo "📋 Testing template with adapter config..."
+	helm template test-release charts/ \
+		--set config.enabled=true \
+		--set config.adapterType=example \
+		--set config.adapterYaml="apiVersion: hyperfleet.redhat.com/v1alpha1" > /dev/null
+	@echo "✅ Adapter config template OK"
+	@echo ""
+	@echo "📋 Testing template with autoscaling..."
+	helm template test-release charts/ \
+		--set autoscaling.enabled=true \
+		--set autoscaling.minReplicas=2 \
+		--set autoscaling.maxReplicas=5 > /dev/null
+	@echo "✅ Autoscaling config template OK"
+	@echo ""
+	@echo "📋 Testing template with probes enabled..."
+	helm template test-release charts/ \
+		--set livenessProbe.enabled=true \
+		--set readinessProbe.enabled=true \
+		--set startupProbe.enabled=true > /dev/null
+	@echo "✅ Probes config template OK"
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "✅ All Helm chart tests passed!"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 .PHONY: verify
 verify: lint test ## Run all verification checks (lint + test)

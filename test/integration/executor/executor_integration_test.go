@@ -1003,6 +1003,7 @@ func (l *logCaptureLogger) Info(message string)    { l.capture("INFO", "%s", mes
 func (l *logCaptureLogger) Warning(message string) { l.capture("WARN", "%s", message) }
 func (l *logCaptureLogger) Error(message string)   { l.capture("ERROR", "%s", message) }
 func (l *logCaptureLogger) Fatal(message string)   { l.t.Fatalf("[FATAL] %s", message) }
+func (l *logCaptureLogger) Flush()                 {}
 
 // TestExecutor_PostActionAPIFailure tests handling of post action API failures (4xx/5xx responses)
 func TestExecutor_PostActionAPIFailure(t *testing.T) {

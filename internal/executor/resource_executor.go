@@ -37,13 +37,17 @@ func (re *ResourceExecutor) ExecuteAll(ctx context.Context, resources []config_l
 	}
 	results := make([]ResourceResult, 0, len(resources))
 
-	for _, resource := range resources {
+	for i, resource := range resources {
+		log.Infof("  [Resource %d/%d] Processing: %s", i+1, len(resources), resource.Name)
 		result, err := re.executeResource(ctx, resource, execCtx, log)
 		results = append(results, result)
 
 		if err != nil {
+			log.Error(fmt.Sprintf("  [Resource %d/%d] %s: FAILED - %v", i+1, len(resources), resource.Name, err))
 			return results, err
 		}
+		log.Infof("  [Resource %d/%d] %s: %s %s/%s (operation: %s) ✓", 
+			i+1, len(resources), resource.Name, result.Kind, result.Namespace, result.ResourceName, result.Operation)
 	}
 
 	return results, nil
@@ -56,9 +60,8 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 		Status: StatusSuccess,
 	}
 
-	log.Infof("Processing resource: %s", resource.Name)
-
 	// Step 1: Build the manifest
+	log.V(1).Infof("    Building manifest from config")
 	manifest, err := re.buildManifest(resource, execCtx, log)
 	if err != nil {
 		result.Status = StatusFailed
@@ -72,23 +75,29 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 	result.Namespace = manifest.GetNamespace()
 	result.ResourceName = manifest.GetName()
 
-	log.Infof("Manifest built: %s %s/%s (namespace: %s)",
-		gvk.Kind, gvk.Group, manifest.GetName(), manifest.GetNamespace())
+	log.Infof("    Manifest: %s/%s %s (namespace: %s)",
+		gvk.Group, gvk.Kind, manifest.GetName(), manifest.GetNamespace())
 
 	// Step 2: Check for existing resource using discovery
 	var existingResource *unstructured.Unstructured
 	if resource.Discovery != nil {
+		log.V(1).Infof("    Discovering existing resource...")
 		existingResource, err = re.discoverExistingResource(ctx, gvk, resource.Discovery, execCtx)
 		if err != nil && !apierrors.IsNotFound(err) {
 			if apperrors.IsRetryableDiscoveryError(err) {
 				// Transient/network error - log and continue, we'll try to create
-				log.Warning(fmt.Sprintf("Transient discovery error (continuing): %v", err))
+				log.Warning(fmt.Sprintf("    Transient discovery error (continuing): %v", err))
 			} else {
 				// Fatal error (auth, permission, validation) - fail fast
 				result.Status = StatusFailed
 				result.Error = err
 				return result, NewExecutorError(PhaseResources, resource.Name, "failed to discover existing resource", err)
 			}
+		}
+		if existingResource != nil {
+			log.Infof("    Existing resource found: %s/%s", existingResource.GetNamespace(), existingResource.GetName())
+		} else {
+			log.Infof("    No existing resource found, will create")
 		}
 	}
 
@@ -97,14 +106,17 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 		// Resource exists - update or recreate
 		if resource.RecreateOnChange {
 			result.Operation = OperationRecreate
+			log.Infof("    Operation: RECREATE (recreateOnChange=true)")
 			result.Resource, err = re.recreateResource(ctx, existingResource, manifest, log)
 		} else {
 			result.Operation = OperationUpdate
+			log.Infof("    Operation: UPDATE")
 			result.Resource, err = re.updateResource(ctx, existingResource, manifest)
 		}
 	} else {
 		// Create new resource
 		result.Operation = OperationCreate
+		log.Infof("    Operation: CREATE")
 		result.Resource, err = re.createResource(ctx, manifest)
 	}
 
@@ -126,10 +138,8 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 	// Store resource in execution context
 	if result.Resource != nil {
 		execCtx.Resources[resource.Name] = result.Resource
+		log.V(1).Infof("    Resource stored in context as '%s'", resource.Name)
 	}
-
-	log.Infof("Resource %s completed: %s %s/%s (operation: %s)",
-		resource.Name, result.Kind, result.Namespace, result.ResourceName, result.Operation)
 
 	return result, nil
 }
@@ -188,7 +198,8 @@ func (re *ResourceExecutor) discoverExistingResource(ctx context.Context, gvk sc
 		return nil, fmt.Errorf("kubernetes client not configured")
 	}
 
-	// Render discovery config templates
+	// Render discovery namespace template
+	// Empty namespace means all namespaces (normalized from "*" at config load time)
 	namespace, err := renderTemplate(discovery.Namespace, execCtx.Params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to render namespace template: %w", err)

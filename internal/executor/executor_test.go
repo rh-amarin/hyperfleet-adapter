@@ -35,6 +35,7 @@ func (m *mockLogger) Info(message string)                               {}
 func (m *mockLogger) Warning(message string)                            { m.warnings = append(m.warnings, message) }
 func (m *mockLogger) Error(message string)                              {}
 func (m *mockLogger) Fatal(message string)                              {}
+func (m *mockLogger) Flush()                                            {}
 
 func TestNewExecutor(t *testing.T) {
 	tests := []struct {

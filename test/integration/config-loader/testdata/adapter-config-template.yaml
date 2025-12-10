@@ -44,7 +44,7 @@ spec:
   # Adapter Information
   adapter:
     # Adapter version
-    version: "0.0.1"
+    version: "0.1.0"
   
   # ============================================================================
   # HyperFleet API Configuration

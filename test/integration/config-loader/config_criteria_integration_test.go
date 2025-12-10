@@ -15,6 +15,13 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/criteria"
 )
 
+// TestMain sets up environment variables required by the adapter config template
+func TestMain(m *testing.M) {
+	// Set required environment variables for tests
+	os.Setenv("HYPERFLEET_API_BASE_URL", "http://test-api.example.com")
+	os.Exit(m.Run())
+}
+
 // getConfigPath returns the path to the adapter config template.
 // It first checks the ADAPTER_CONFIG_PATH environment variable, then falls back
 // to resolving the path relative to the project root.
@@ -37,7 +44,8 @@ func TestConfigLoadAndCriteriaEvaluation(t *testing.T) {
 	ctx := criteria.NewEvaluationContext()
 
 	// Simulate data extracted from HyperFleet API response
-	ctx.Set("clusterPhase", "Ready")
+	// NOTE: clusterPhase must match the condition in the template (NotReady)
+	ctx.Set("clusterPhase", "NotReady")
 	ctx.Set("cloudProvider", "aws")
 	ctx.Set("vpcId", "vpc-12345")
 	ctx.Set("region", "us-east-1")
@@ -56,7 +64,7 @@ func TestConfigLoadAndCriteriaEvaluation(t *testing.T) {
 			"node_count": 3,
 		},
 		"status": map[string]interface{}{
-			"phase": "Ready",
+			"phase": "NotReady",
 		},
 	})
 
@@ -143,9 +151,7 @@ func TestConfigConditionsToCEL(t *testing.T) {
 
 	t.Run("evaluate converted CEL expression", func(t *testing.T) {
 		ctx := criteria.NewEvaluationContext()
-		ctx.Set("clusterPhase", "Ready")
-		ctx.Set("cloudProvider", "aws")
-		ctx.Set("vpcId", "vpc-12345")
+		ctx.Set("clusterPhase", "NotReady") // Must match template condition
 
 		evaluator := criteria.NewEvaluator(ctx, nil)
 
@@ -176,9 +182,7 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 
 	t.Run("preconditions fail with wrong phase", func(t *testing.T) {
 		ctx := criteria.NewEvaluationContext()
-		ctx.Set("clusterPhase", "Terminating") // Not in allowed list
-		ctx.Set("cloudProvider", "aws")
-		ctx.Set("vpcId", "vpc-12345")
+		ctx.Set("clusterPhase", "Terminating") // Not matching "NotReady"
 
 		evaluator := criteria.NewEvaluator(ctx, nil)
 
@@ -197,11 +201,9 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 		assert.Equal(t, 0, result.FailedCondition, "first condition (clusterPhase) should fail")
 	})
 
-	t.Run("preconditions fail with wrong provider", func(t *testing.T) {
+	t.Run("preconditions fail with Ready phase", func(t *testing.T) {
 		ctx := criteria.NewEvaluationContext()
-		ctx.Set("clusterPhase", "Ready")
-		ctx.Set("cloudProvider", "onprem") // Not in allowed list
-		ctx.Set("vpcId", "vpc-12345")
+		ctx.Set("clusterPhase", "Ready") // Not matching "NotReady"
 
 		evaluator := criteria.NewEvaluator(ctx, nil)
 
@@ -216,18 +218,16 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 
 		result, err := evaluator.EvaluateConditionsWithResult(conditions)
 		require.NoError(t, err)
-		assert.False(t, result.Matched, "preconditions should fail with wrong provider")
+		assert.False(t, result.Matched, "preconditions should fail when phase is Ready (expected NotReady)")
 	})
 
 	t.Run("preconditions fail with missing vpcId", func(t *testing.T) {
 		ctx := criteria.NewEvaluationContext()
-		ctx.Set("clusterPhase", "Ready")
-		ctx.Set("cloudProvider", "aws")
 		// vpcId not set - should fail exists check
 
 		evaluator := criteria.NewEvaluator(ctx, nil)
 
-		// Just check the vpcId exists condition
+		// Just check the vpcId exists condition (this is a general test, not tied to template)
 		result := evaluator.EvaluateConditionSafe("vpcId", criteria.OperatorExists, true)
 		assert.False(t, result, "exists check should fail when field is missing")
 	})

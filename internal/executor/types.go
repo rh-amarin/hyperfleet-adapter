@@ -322,6 +322,31 @@ func (ec *ExecutionContext) SetSkipped(reason, message string) {
 	}
 }
 
+// GetCELVariables returns all variables for CEL evaluation.
+// This includes Params, adapter metadata, and resources.
+func (ec *ExecutionContext) GetCELVariables() map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// Copy all params
+	for k, v := range ec.Params {
+		result[k] = v
+	}
+
+	// Add adapter metadata (use helper from utils.go)
+	result["adapter"] = adapterMetadataToMap(&ec.Adapter)
+
+	// Add resources (convert unstructured to maps)
+	resources := make(map[string]interface{})
+	for name, resource := range ec.Resources {
+		if resource != nil {
+			resources[name] = resource.Object
+		}
+	}
+	result["resources"] = resources
+
+	return result
+}
+
 // ExecutorError represents an error during execution
 type ExecutorError struct {
 	Phase   ExecutionPhase

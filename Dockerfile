@@ -48,6 +48,6 @@ CMD ["serve"]
 
 LABEL name="hyperfleet-adapter" \
       vendor="Red Hat" \
-      version="0.0.1" \
+      version="0.1.0" \
       summary="HyperFleet Adapter - Event-driven adapter services for HyperFleet cluster provisioning" \
       description="Handles CloudEvents consumption, AdapterConfig CRD integration, precondition evaluation, Kubernetes Job creation/monitoring, and status reporting via API"
