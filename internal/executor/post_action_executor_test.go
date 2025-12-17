@@ -14,22 +14,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testLogger implements logger.Logger for testing
-type testLogger struct{}
-
-func (l *testLogger) V(level int32) logger.Logger                       { return l }
-func (l *testLogger) Infof(format string, args ...interface{})          {}
-func (l *testLogger) Warningf(format string, args ...interface{})       {}
-func (l *testLogger) Errorf(format string, args ...interface{})         {}
-func (l *testLogger) Extra(key string, value interface{}) logger.Logger { return l }
-func (l *testLogger) Info(message string)                               {}
-func (l *testLogger) Warning(message string)                            {}
-func (l *testLogger) Error(message string)                              {}
-func (l *testLogger) Fatal(message string)                              {}
-func (l *testLogger) Flush()                                            {}
+// testPAE creates a PostActionExecutor for tests
+func testPAE() *PostActionExecutor {
+	return newPostActionExecutor(&ExecutorConfig{
+		Logger:    logger.NewTestLogger(),
+		APIClient: newMockAPIClient(),
+	})
+}
 
 func TestBuildPayload(t *testing.T) {
-	log := &testLogger{}
+	pae := testPAE()
 
 	tests := []struct {
 		name        string
@@ -101,9 +95,10 @@ func TestBuildPayload(t *testing.T) {
 			for k, v := range tt.params {
 				evalCtx.Set(k, v)
 			}
-			evaluator := criteria.NewEvaluator(evalCtx, log)
+			evaluator, err := criteria.NewEvaluator(context.Background(), evalCtx, pae.log)
+			assert.NoError(t, err)
 
-			result, err := buildPayload(tt.build, evaluator, tt.params, log)
+			result, err := pae.buildPayload(context.Background(), tt.build, evaluator, tt.params)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -117,7 +112,7 @@ func TestBuildPayload(t *testing.T) {
 }
 
 func TestBuildMapPayload(t *testing.T) {
-	log := &testLogger{}
+	pae := testPAE()
 
 	tests := []struct {
 		name        string
@@ -206,9 +201,9 @@ func TestBuildMapPayload(t *testing.T) {
 			for k, v := range tt.params {
 				evalCtx.Set(k, v)
 			}
-			evaluator := criteria.NewEvaluator(evalCtx, log)
-
-			result, err := buildMapPayload(tt.input, evaluator, tt.params, log)
+			evaluator, err := criteria.NewEvaluator(context.Background(), evalCtx, pae.log)
+			require.NoError(t, err)
+			result, err := pae.buildMapPayload(context.Background(), tt.input, evaluator, tt.params)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -222,7 +217,7 @@ func TestBuildMapPayload(t *testing.T) {
 }
 
 func TestProcessValue(t *testing.T) {
-	log := &testLogger{}
+	pae := testPAE()
 
 	tests := []struct {
 		name        string
@@ -332,9 +327,9 @@ func TestProcessValue(t *testing.T) {
 			for k, v := range tt.evalCtxData {
 				evalCtx.Set(k, v)
 			}
-			evaluator := criteria.NewEvaluator(evalCtx, log)
-
-			result, err := processValue(tt.value, evaluator, tt.params, log)
+			evaluator, err := criteria.NewEvaluator(context.Background(), evalCtx, pae.log)
+			require.NoError(t, err)
+			result, err := pae.processValue(context.Background(), tt.value, evaluator, tt.params)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -421,19 +416,19 @@ func TestPostActionExecutor_ExecuteAll(t *testing.T) {
 				mockClient.DoResponse = tt.mockResponse
 			}
 
-			pae := NewPostActionExecutor(mockClient)
+			pae := newPostActionExecutor(&ExecutorConfig{
+				APIClient: mockClient,
+				Logger:    logger.NewTestLogger(),
+			})
 
 			evt := event.New()
 			evt.SetID("test-event")
-			execCtx := NewExecutionContext(context.Background(), &evt, map[string]interface{}{})
-
-			log := &testLogger{}
+			execCtx := NewExecutionContext(context.Background(), map[string]interface{}{})
 
 			results, err := pae.ExecuteAll(
 				context.Background(),
 				tt.postConfig,
 				execCtx,
-				log,
 			)
 
 			if tt.expectError {
@@ -638,18 +633,15 @@ func TestExecuteAPICall(t *testing.T) {
 				mockClient.DoError = tt.mockError
 			}
 
-			evt := event.New()
-			execCtx := NewExecutionContext(context.Background(), &evt, map[string]interface{}{})
+			execCtx := NewExecutionContext(context.Background(), map[string]interface{}{})
 			execCtx.Params = tt.params
-
-			log := &testLogger{}
 
 			resp, url, err := ExecuteAPICall(
 				context.Background(),
 				tt.apiCall,
 				execCtx,
 				mockClient,
-				log,
+				logger.NewTestLogger(),
 			)
 
 			if tt.expectError {

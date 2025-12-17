@@ -169,7 +169,7 @@ func runValidationPipeline(config *AdapterConfig, cfg *loaderConfig) error {
 
 	// Semantic validation (optional, can be skipped for performance)
 	if !cfg.skipSemanticValidation {
-		if err := Validate(config); err != nil {
+		if err := newValidator(config).Validate(); err != nil {
 			return fmt.Errorf("semantic validation failed: %w", err)
 		}
 	}

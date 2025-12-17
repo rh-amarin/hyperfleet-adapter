@@ -137,15 +137,5 @@ func addMetadataParams(config *config_loader.AdapterConfig, execCtx *ExecutionCo
 		"namespace": config.Metadata.Namespace,
 		"labels":    config.Metadata.Labels,
 	}
-
-	// Add event metadata if available
-	if execCtx.Event != nil {
-		execCtx.Params["eventMetadata"] = map[string]interface{}{
-			"id":     execCtx.Event.ID(),
-			"type":   execCtx.Event.Type(),
-			"source": execCtx.Event.Source(),
-			"time":   execCtx.Event.Time().String(),
-		}
-	}
 }
 

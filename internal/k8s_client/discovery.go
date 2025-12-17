@@ -82,7 +82,7 @@ func (c *Client) DiscoverResources(ctx context.Context, gvk schema.GroupVersionK
 
 	if discovery.IsSingleResource() {
 		// Single resource by name
-		c.log.Infof("Discovering single resource: %s/%s (namespace: %s)",
+		c.log.Infof(ctx, "Discovering single resource: %s/%s (namespace: %s)",
 			gvk.Kind, discovery.GetName(), discovery.GetNamespace())
 
 		obj, err := c.GetResource(ctx, gvk, discovery.GetNamespace(), discovery.GetName())

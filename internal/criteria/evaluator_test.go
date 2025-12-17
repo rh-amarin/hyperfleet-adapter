@@ -1,9 +1,11 @@
 package criteria
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -520,7 +522,8 @@ func TestEvaluatorEvaluateCondition(t *testing.T) {
 		"phase": "Active",
 	})
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	tests := []struct {
 		name      string
@@ -607,7 +610,8 @@ func TestEvaluatorEvaluateConditions(t *testing.T) {
 	ctx.Set("cloudProvider", "aws")
 	ctx.Set("vpcId", "vpc-12345")
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	tests := []struct {
 		name       string
@@ -768,10 +772,22 @@ func TestEvaluationError(t *testing.T) {
 	assert.Equal(t, assert.AnError, err2.Unwrap())
 }
 
-func TestNewEvaluatorWithNilContext(t *testing.T) {
-	evaluator := NewEvaluator(nil, nil)
-	require.NotNil(t, evaluator)
-	require.NotNil(t, evaluator.context)
+func TestNewEvaluatorErrorsWithNilParams(t *testing.T) {
+	t.Run("errors with nil ctx", func(t *testing.T) {
+		_, err := NewEvaluator(nil, NewEvaluationContext(), logger.NewTestLogger()) //nolint:staticcheck // intentionally testing nil ctx
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "ctx is required")
+	})
+	t.Run("errors with nil evalCtx", func(t *testing.T) {
+		_, err := NewEvaluator(context.Background(), nil, logger.NewTestLogger())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "evalCtx is required")
+	})
+	t.Run("errors with nil log", func(t *testing.T) {
+		_, err := NewEvaluator(context.Background(), NewEvaluationContext(), nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "log is required")
+	})
 }
 
 func TestGetField(t *testing.T) {
@@ -785,7 +801,8 @@ func TestGetField(t *testing.T) {
 		},
 	})
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	// Get existing field
 	value, err := evaluator.GetField("cluster.metadata.name")
@@ -810,7 +827,8 @@ func TestGetFieldOrDefault(t *testing.T) {
 		},
 	})
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	// Get existing field
 	value := evaluator.GetFieldOrDefault("cluster.metadata.name", "default")
@@ -831,7 +849,8 @@ func TestEvaluateConditionWithResult(t *testing.T) {
 	ctx.Set("replicas", 3)
 	ctx.Set("provider", "aws")
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	// Test equals - matched
 	result, err := evaluator.EvaluateConditionWithResult("status", OperatorEquals, "Ready")
@@ -867,7 +886,8 @@ func TestEvaluateConditionsWithResult(t *testing.T) {
 	ctx.Set("replicas", 3)
 	ctx.Set("provider", "aws")
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	// All conditions pass
 	conditions := []ConditionDef{
@@ -918,8 +938,8 @@ func TestExtractFields(t *testing.T) {
 		},
 	})
 
-	evaluator := NewEvaluator(ctx, nil)
-
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 	// Extract multiple fields
 	fields := []string{"cluster.metadata.name", "cluster.metadata.namespace", "cluster.status.phase"}
 	extracted, err := evaluator.ExtractFields(fields)
@@ -944,7 +964,8 @@ func TestExtractFieldsSafe(t *testing.T) {
 		"status": nil, // null value
 	})
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	fields := []string{
 		"cluster.metadata.name",  // exists
@@ -969,7 +990,8 @@ func TestExtractFieldsOrDefault(t *testing.T) {
 		},
 	})
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	fields := map[string]interface{}{
 		"cluster.metadata.name": "default-name",
@@ -1015,7 +1037,8 @@ func TestNullHandling(t *testing.T) {
 		},
 	})
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	t.Run("access field on null parent", func(t *testing.T) {
 		// Accessing cluster.status.phase when status is null
@@ -1069,10 +1092,11 @@ func TestDeepNullPath(t *testing.T) {
 		},
 	})
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	// a.b.c is null, so a.b.c.d.e.f should fail gracefully
-	_, err := evaluator.GetField("a.b.c.d.e.f")
+	_, err = evaluator.GetField("a.b.c.d.e.f")
 	assert.Error(t, err)
 	assert.True(t, IsFieldNotFound(err))
 

@@ -18,33 +18,36 @@ import (
 // ResourceExecutor creates and updates Kubernetes resources
 type ResourceExecutor struct {
 	k8sClient k8s_client.K8sClient
+	log       logger.Logger
 }
 
-// NewResourceExecutor creates a new resource executor
-func NewResourceExecutor(k8sClient k8s_client.K8sClient) *ResourceExecutor {
+// newResourceExecutor creates a new resource executor
+// NOTE: Caller (NewExecutor) is responsible for config validation
+func newResourceExecutor(config *ExecutorConfig) *ResourceExecutor {
 	return &ResourceExecutor{
-		k8sClient: k8sClient,
+		k8sClient: config.K8sClient,
+		log:       config.Logger,
 	}
 }
 
 // ExecuteAll creates/updates all resources in sequence
 // Returns results for each resource and updates the execution context
-func (re *ResourceExecutor) ExecuteAll(ctx context.Context, resources []config_loader.Resource, execCtx *ExecutionContext, log logger.Logger) ([]ResourceResult, error) {
+func (re *ResourceExecutor) ExecuteAll(ctx context.Context, resources []config_loader.Resource, execCtx *ExecutionContext) ([]ResourceResult, error) {
 	if execCtx.Resources == nil {
 		execCtx.Resources = make(map[string]*unstructured.Unstructured)
 	}
 	results := make([]ResourceResult, 0, len(resources))
 
 	for i, resource := range resources {
-		log.Infof("  [Resource %d/%d] Processing: %s", i+1, len(resources), resource.Name)
-		result, err := re.executeResource(ctx, resource, execCtx, log)
+		re.log.Infof(ctx, "[Resource %d/%d] Processing: %s", i+1, len(resources), resource.Name)
+		result, err := re.executeResource(ctx, resource, execCtx)
 		results = append(results, result)
 
 		if err != nil {
-			log.Error(fmt.Sprintf("  [Resource %d/%d] %s: FAILED - %v", i+1, len(resources), resource.Name, err))
+			re.log.Errorf(ctx, "[Resource %d/%d] %s: FAILED - %v", i+1, len(resources), resource.Name, err)
 			return results, err
 		}
-		log.Infof("  [Resource %d/%d] %s: %s %s/%s (operation: %s) ✓", 
+		re.log.Infof(ctx, "[Resource %d/%d] %s: %s %s/%s (operation: %s) ✓",
 			i+1, len(resources), resource.Name, result.Kind, result.Namespace, result.ResourceName, result.Operation)
 	}
 
@@ -52,15 +55,15 @@ func (re *ResourceExecutor) ExecuteAll(ctx context.Context, resources []config_l
 }
 
 // executeResource creates or updates a single Kubernetes resource
-func (re *ResourceExecutor) executeResource(ctx context.Context, resource config_loader.Resource, execCtx *ExecutionContext, log logger.Logger) (ResourceResult, error) {
+func (re *ResourceExecutor) executeResource(ctx context.Context, resource config_loader.Resource, execCtx *ExecutionContext) (ResourceResult, error) {
 	result := ResourceResult{
 		Name:   resource.Name,
 		Status: StatusSuccess,
 	}
 
 	// Step 1: Build the manifest
-	log.V(1).Infof("    Building manifest from config")
-	manifest, err := re.buildManifest(resource, execCtx, log)
+	re.log.Debugf(ctx, "Building manifest from config")
+	manifest, err := re.buildManifest(ctx, resource, execCtx)
 	if err != nil {
 		result.Status = StatusFailed
 		result.Error = err
@@ -73,18 +76,18 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 	result.Namespace = manifest.GetNamespace()
 	result.ResourceName = manifest.GetName()
 
-	log.Infof("    Manifest: %s/%s %s (namespace: %s)",
+re.log.Infof(ctx, "Manifest: %s/%s %s (namespace: %s)",
 		gvk.Group, gvk.Kind, manifest.GetName(), manifest.GetNamespace())
 
 	// Step 2: Check for existing resource using discovery
 	var existingResource *unstructured.Unstructured
 	if resource.Discovery != nil {
-		log.V(1).Infof("    Discovering existing resource...")
+	re.log.Debugf(ctx, "Discovering existing resource...")
 		existingResource, err = re.discoverExistingResource(ctx, gvk, resource.Discovery, execCtx)
 		if err != nil && !apierrors.IsNotFound(err) {
 			if apperrors.IsRetryableDiscoveryError(err) {
 				// Transient/network error - log and continue, we'll try to create
-				log.Warning(fmt.Sprintf("    Transient discovery error (continuing): %v", err))
+			re.log.Warnf(ctx, "    Transient discovery error (continuing): %v", err)
 			} else {
 				// Fatal error (auth, permission, validation) - fail fast
 				result.Status = StatusFailed
@@ -93,9 +96,9 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 			}
 		}
 		if existingResource != nil {
-			log.Infof("    Existing resource found: %s/%s", existingResource.GetNamespace(), existingResource.GetName())
+		re.log.Infof(ctx, "Existing resource found: %s/%s", existingResource.GetNamespace(), existingResource.GetName())
 		} else {
-			log.Infof("    No existing resource found, will create")
+		re.log.Infof(ctx, "No existing resource found, will create")
 		}
 	}
 
@@ -109,38 +112,36 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 			// Generations match - no action needed
 			result.Operation = OperationSkip
 			result.Resource = existingResource
-			log.Infof("    Operation: SKIP (generation %d unchanged)", existingGen)
+		re.log.Infof(ctx, "Operation: SKIP (generation %d unchanged)", existingGen)
 		} else {
 			// Generations do not match - perform the appropriate action
 			// resource management is further feature. Current update and recreate is a placeholder for temporary use.
 			if resource.RecreateOnChange {
 				result.Operation = OperationRecreate
-				log.Infof("    Operation: RECREATE (recreateOnChange=true)")
-				result.Resource, err = re.recreateResource(ctx, existingResource, manifest, log)
+				re.log.Infof(ctx, "Operation: RECREATE (recreateOnChange=true)")
+				result.Resource, err = re.recreateResource(ctx, existingResource, manifest)
 			} else {
 				result.Operation = OperationUpdate
-				log.Infof("    Operation: UPDATE")
+				re.log.Infof(ctx, "Operation: UPDATE")
 				result.Resource, err = re.updateResource(ctx, existingResource, manifest)
 			}
 		}
 	} else {
 		// Create new resource
 		result.Operation = OperationCreate
-		log.Infof("    Operation: CREATE")
+	re.log.Infof(ctx, "Operation: CREATE")
 		result.Resource, err = re.createResource(ctx, manifest)
 	}
 
 	if err != nil {
 		result.Status = StatusFailed
 		result.Error = err
-		
 		// Set ExecutionError for K8s operation failure
 		execCtx.Adapter.ExecutionError = &ExecutionError{
 			Phase:   string(PhaseResources),
 			Step:    resource.Name,
 			Message: err.Error(),
 		}
-		
 		return result, NewExecutorError(PhaseResources, resource.Name,
 			fmt.Sprintf("failed to %s resource", result.Operation), err)
 	}
@@ -148,14 +149,14 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 	// Store resource in execution context
 	if result.Resource != nil {
 		execCtx.Resources[resource.Name] = result.Resource
-		log.V(1).Infof("    Resource stored in context as '%s'", resource.Name)
+	re.log.Debugf(ctx, "Resource stored in context as '%s'", resource.Name)
 	}
 
 	return result, nil
 }
 
 // buildManifest builds an unstructured manifest from the resource configuration
-func (re *ResourceExecutor) buildManifest(resource config_loader.Resource, execCtx *ExecutionContext, log logger.Logger) (*unstructured.Unstructured, error) {
+func (re *ResourceExecutor) buildManifest(ctx context.Context, resource config_loader.Resource, execCtx *ExecutionContext) (*unstructured.Unstructured, error) {
 	var manifestData map[string]interface{}
 
 	// Check if manifest is inline or from ManifestItems (loaded from ref)
@@ -177,7 +178,7 @@ func (re *ResourceExecutor) buildManifest(resource config_loader.Resource, execC
 	}
 
 	// Deep copy to avoid modifying the original
-	manifestData = deepCopyMap(manifestData, log)
+	manifestData = deepCopyMap(ctx, manifestData, re.log)
 
 	// Render all template strings in the manifest
 	renderedData, err := renderManifestTemplates(manifestData, execCtx.Params)
@@ -302,7 +303,7 @@ func (re *ResourceExecutor) updateResource(ctx context.Context, existing, manife
 // recreateResource deletes and recreates a Kubernetes resource
 // It waits for the resource to be fully deleted before creating the new one
 // to avoid race conditions with Kubernetes asynchronous deletion
-func (re *ResourceExecutor) recreateResource(ctx context.Context, existing, manifest *unstructured.Unstructured, log logger.Logger) (*unstructured.Unstructured, error) {
+func (re *ResourceExecutor) recreateResource(ctx context.Context, existing, manifest *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if re.k8sClient == nil {
 		return nil, fmt.Errorf("kubernetes client not configured")
 	}
@@ -312,25 +313,25 @@ func (re *ResourceExecutor) recreateResource(ctx context.Context, existing, mani
 	name := existing.GetName()
 
 	// Delete the existing resource
-	log.Infof("Deleting resource for recreation: %s/%s", gvk.Kind, name)
+re.log.Infof(ctx, "Deleting resource for recreation: %s/%s", gvk.Kind, name)
 	if err := re.k8sClient.DeleteResource(ctx, gvk, namespace, name); err != nil {
 		return nil, fmt.Errorf("failed to delete resource for recreation: %w", err)
 	}
 
 	// Wait for the resource to be fully deleted
-	log.Infof("Waiting for resource deletion to complete: %s/%s", gvk.Kind, name)
-	if err := re.waitForDeletion(ctx, gvk, namespace, name, log); err != nil {
+re.log.Infof(ctx, "Waiting for resource deletion to complete: %s/%s", gvk.Kind, name)
+	if err := re.waitForDeletion(ctx, gvk, namespace, name); err != nil {
 		return nil, fmt.Errorf("failed waiting for resource deletion: %w", err)
 	}
 
 	// Create the new resource
-	log.Infof("Creating new resource after deletion confirmed: %s/%s", gvk.Kind, manifest.GetName())
+re.log.Infof(ctx, "Creating new resource after deletion confirmed: %s/%s", gvk.Kind, manifest.GetName())
 	return re.k8sClient.CreateResource(ctx, manifest)
 }
 
 // waitForDeletion polls until the resource is confirmed deleted or context times out
 // Returns nil when the resource is confirmed gone (NotFound), or an error otherwise
-func (re *ResourceExecutor) waitForDeletion(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string, log logger.Logger) error {
+func (re *ResourceExecutor) waitForDeletion(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) error {
 	const pollInterval = 100 * time.Millisecond
 
 	ticker := time.NewTicker(pollInterval)
@@ -339,22 +340,22 @@ func (re *ResourceExecutor) waitForDeletion(ctx context.Context, gvk schema.Grou
 	for {
 		select {
 		case <-ctx.Done():
-			log.Warning(fmt.Sprintf("Context cancelled/timed out while waiting for deletion of %s/%s", gvk.Kind, name))
+		re.log.Warnf(ctx, "Context cancelled/timed out while waiting for deletion of %s/%s", gvk.Kind, name)
 			return fmt.Errorf("context cancelled while waiting for resource deletion: %w", ctx.Err())
 		case <-ticker.C:
 			_, err := re.k8sClient.GetResource(ctx, gvk, namespace, name)
 			if err != nil {
 				// NotFound means the resource is deleted - this is success
 				if apierrors.IsNotFound(err) {
-					log.Infof("Resource deletion confirmed: %s/%s", gvk.Kind, name)
+				re.log.Infof(ctx, "Resource deletion confirmed: %s/%s", gvk.Kind, name)
 					return nil
 				}
 				// Any other error is unexpected
-				log.Error(fmt.Sprintf("Error checking resource deletion status for %s/%s: %v", gvk.Kind, name, err))
+			re.log.Errorf(ctx, "Error checking resource deletion status for %s/%s: %v", gvk.Kind, name, err)
 				return fmt.Errorf("error checking deletion status: %w", err)
 			}
 			// Resource still exists, continue polling
-			log.V(2).Infof("Resource %s/%s still exists, waiting for deletion...", gvk.Kind, name)
+		re.log.Debugf(ctx, "Resource %s/%s still exists, waiting for deletion...", gvk.Kind, name)
 		}
 	}
 }
@@ -398,17 +399,15 @@ func convertSlice(s []interface{}) []interface{} {
 // If deep copy fails, it falls back to a shallow copy and logs a warning.
 // WARNING: Shallow copy means nested maps/slices will share references with the original,
 // which could lead to unexpected mutations.
-func deepCopyMap(m map[string]interface{}, log logger.Logger) map[string]interface{} {
+func deepCopyMap(ctx context.Context, m map[string]interface{}, log logger.Logger) map[string]interface{} {
 	if m == nil {
 		return nil
 	}
 
 	copied, err := copystructure.Copy(m)
 	if err != nil {
-		// Fallback to shallow copy - LOG WARNING
-		if log != nil {
-			log.Warning(fmt.Sprintf("deepCopyMap: deep copy failed, falling back to shallow copy (mutations may affect original): %v", err))
-		}
+		// Fallback to shallow copy if deep copy fails
+		log.Warnf(ctx, "Failed to deep copy map: %v. Falling back to shallow copy.", err)
 		result := make(map[string]interface{})
 		for k, v := range m {
 			result[k] = v
@@ -419,9 +418,6 @@ func deepCopyMap(m map[string]interface{}, log logger.Logger) map[string]interfa
 	result, ok := copied.(map[string]interface{})
 	if !ok {
 		// Should not happen, but handle gracefully
-		if log != nil {
-			log.Warning(fmt.Sprintf("deepCopyMap: unexpected type after copy (%T), falling back to shallow copy", copied))
-		}
 		result := make(map[string]interface{})
 		for k, v := range m {
 			result[k] = v
@@ -498,4 +494,3 @@ func BuildResourcesMap(resources map[string]*unstructured.Unstructured) map[stri
 	}
 	return result
 }
-

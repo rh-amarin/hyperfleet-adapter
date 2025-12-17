@@ -78,14 +78,14 @@ func NewClient(ctx context.Context, config ClientConfig, log logger.Logger) (*Cl
 		if err != nil {
 			return nil, apperrors.KubernetesError("failed to load kubeconfig from %s: %v", kubeConfigPath, err)
 		}
-		log.Infof("Using kubeconfig from: %s", kubeConfigPath)
+		log.Infof(ctx, "Using kubeconfig from: %s", kubeConfigPath)
 	} else {
 		// Use in-cluster config with ServiceAccount
 		restConfig, err = rest.InClusterConfig()
 		if err != nil {
 			return nil, apperrors.KubernetesError("failed to create in-cluster config: %v", err)
 		}
-		log.Info("Using in-cluster Kubernetes configuration (ServiceAccount)")
+		log.Info(ctx, "Using in-cluster Kubernetes configuration (ServiceAccount)")
 	}
 
 	// Set rate limits
@@ -133,7 +133,7 @@ func (c *Client) CreateResource(ctx context.Context, obj *unstructured.Unstructu
 	namespace := obj.GetNamespace()
 	name := obj.GetName()
 
-	c.log.Infof("Creating resource: %s/%s (namespace: %s)", gvk.Kind, name, namespace)
+	c.log.Infof(ctx, "Creating resource: %s/%s (namespace: %s)", gvk.Kind, name, namespace)
 
 	err := c.client.Create(ctx, obj)
 	if err != nil {
@@ -150,13 +150,13 @@ func (c *Client) CreateResource(ctx context.Context, obj *unstructured.Unstructu
 		}
 	}
 
-	c.log.Infof("Successfully created resource: %s/%s", gvk.Kind, name)
+	c.log.Infof(ctx, "Successfully created resource: %s/%s", gvk.Kind, name)
 	return obj, nil
 }
 
 // GetResource retrieves a specific Kubernetes resource by GVK, namespace, and name
 func (c *Client) GetResource(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) (*unstructured.Unstructured, error) {
-	c.log.Infof("Getting resource: %s/%s (namespace: %s)", gvk.Kind, name, namespace)
+	c.log.Infof(ctx, "Getting resource: %s/%s (namespace: %s)", gvk.Kind, name, namespace)
 
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
@@ -182,7 +182,7 @@ func (c *Client) GetResource(ctx context.Context, gvk schema.GroupVersionKind, n
 		}
 	}
 
-	c.log.Infof("Successfully retrieved resource: %s/%s", gvk.Kind, name)
+	c.log.Infof(ctx, "Successfully retrieved resource: %s/%s", gvk.Kind, name)
 	return obj, nil
 }
 
@@ -195,7 +195,7 @@ func (c *Client) GetResource(ctx context.Context, gvk schema.GroupVersionKind, n
 //
 // For more flexible discovery (including by-name lookup), use DiscoverResources() instead.
 func (c *Client) ListResources(ctx context.Context, gvk schema.GroupVersionKind, namespace string, labelSelector string) (*unstructured.UnstructuredList, error) {
-	c.log.Infof("Listing resources: %s (namespace: %s, labelSelector: %s)", gvk.Kind, namespace, labelSelector)
+	c.log.Infof(ctx, "Listing resources: %s (namespace: %s, labelSelector: %s)", gvk.Kind, namespace, labelSelector)
 
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(gvk)
@@ -228,7 +228,7 @@ func (c *Client) ListResources(ctx context.Context, gvk schema.GroupVersionKind,
 		}
 	}
 
-	c.log.Infof("Successfully listed resources: %s (found %d items)", gvk.Kind, len(list.Items))
+	c.log.Infof(ctx, "Successfully listed resources: %s (found %d items)", gvk.Kind, len(list.Items))
 	return list, nil
 }
 
@@ -249,15 +249,16 @@ func (c *Client) ListResources(ctx context.Context, gvk schema.GroupVersionKind,
 //   - You want to avoid conflicts with concurrent updates
 //
 // Example:
-//   resource, _ := client.GetResource(ctx, gvk, "default", "my-cm")
-//   resource.SetLabels(map[string]string{"app": "myapp"})
-//   updated, err := client.UpdateResource(ctx, resource)
+//
+//	resource, _ := client.GetResource(ctx, gvk, "default", "my-cm")
+//	resource.SetLabels(map[string]string{"app": "myapp"})
+//	updated, err := client.UpdateResource(ctx, resource)
 func (c *Client) UpdateResource(ctx context.Context, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	gvk := obj.GroupVersionKind()
 	namespace := obj.GetNamespace()
 	name := obj.GetName()
 
-	c.log.Infof("Updating resource: %s/%s (namespace: %s)", gvk.Kind, name, namespace)
+	c.log.Infof(ctx, "Updating resource: %s/%s (namespace: %s)", gvk.Kind, name, namespace)
 
 	err := c.client.Update(ctx, obj)
 	if err != nil {
@@ -274,13 +275,13 @@ func (c *Client) UpdateResource(ctx context.Context, obj *unstructured.Unstructu
 		}
 	}
 
-	c.log.Infof("Successfully updated resource: %s/%s", gvk.Kind, name)
+	c.log.Infof(ctx, "Successfully updated resource: %s/%s", gvk.Kind, name)
 	return obj, nil
 }
 
 // DeleteResource deletes a Kubernetes resource
 func (c *Client) DeleteResource(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) error {
-	c.log.Infof("Deleting resource: %s/%s (namespace: %s)", gvk.Kind, name, namespace)
+	c.log.Infof(ctx, "Deleting resource: %s/%s (namespace: %s)", gvk.Kind, name, namespace)
 
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
@@ -290,7 +291,7 @@ func (c *Client) DeleteResource(ctx context.Context, gvk schema.GroupVersionKind
 	err := c.client.Delete(ctx, obj)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			c.log.Infof("Resource already deleted: %s/%s", gvk.Kind, name)
+			c.log.Infof(ctx, "Resource already deleted: %s/%s", gvk.Kind, name)
 			return nil
 		}
 		return &apperrors.K8sOperationError{
@@ -303,7 +304,7 @@ func (c *Client) DeleteResource(ctx context.Context, gvk schema.GroupVersionKind
 		}
 	}
 
-	c.log.Infof("Successfully deleted resource: %s/%s", gvk.Kind, name)
+	c.log.Infof(ctx, "Successfully deleted resource: %s/%s", gvk.Kind, name)
 	return nil
 }
 
@@ -329,10 +330,11 @@ func (c *Client) DeleteResource(ctx context.Context, gvk schema.GroupVersionKind
 //   - You're making complex multi-field changes
 //
 // Example:
-//   patchData := []byte(`{"metadata":{"labels":{"new-label":"value"}}}`)
-//   patched, err := client.PatchResource(ctx, gvk, "default", "my-cm", patchData)
+//
+//	patchData := []byte(`{"metadata":{"labels":{"new-label":"value"}}}`)
+//	patched, err := client.PatchResource(ctx, gvk, "default", "my-cm", patchData)
 func (c *Client) PatchResource(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string, patchData []byte) (*unstructured.Unstructured, error) {
-	c.log.Infof("Patching resource: %s/%s (namespace: %s)", gvk.Kind, name, namespace)
+	c.log.Infof(ctx, "Patching resource: %s/%s (namespace: %s)", gvk.Kind, name, namespace)
 
 	// Parse patch data to validate JSON
 	var patchObj map[string]interface{}
@@ -349,7 +351,7 @@ func (c *Client) PatchResource(ctx context.Context, gvk schema.GroupVersionKind,
 	// Apply the patch using JSON merge patch type
 	// This is equivalent to kubectl patch with --type=merge
 	patch := client.RawPatch(types.MergePatchType, patchData)
-	
+
 	err := c.client.Patch(ctx, obj, patch)
 	if err != nil {
 		// Don't wrap NotFound errors so callers can check for them
@@ -366,8 +368,8 @@ func (c *Client) PatchResource(ctx context.Context, gvk schema.GroupVersionKind,
 		}
 	}
 
-	c.log.Infof("Successfully patched resource: %s/%s", gvk.Kind, name)
-	
+	c.log.Infof(ctx, "Successfully patched resource: %s/%s", gvk.Kind, name)
+
 	// Get the updated resource to return
 	return c.GetResource(ctx, gvk, namespace, name)
 }

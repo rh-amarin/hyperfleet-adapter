@@ -14,27 +14,30 @@ import (
 // PostActionExecutor executes post-processing actions
 type PostActionExecutor struct {
 	apiClient hyperfleet_api.Client
+	log       logger.Logger
 }
 
-// NewPostActionExecutor creates a new post-action executor
-func NewPostActionExecutor(apiClient hyperfleet_api.Client) *PostActionExecutor {
+// newPostActionExecutor creates a new post-action executor
+// NOTE: Caller (NewExecutor) is responsible for config validation
+func newPostActionExecutor(config *ExecutorConfig) *PostActionExecutor {
 	return &PostActionExecutor{
-		apiClient: apiClient,
+		apiClient: config.APIClient,
+		log:       config.Logger,
 	}
 }
 
 // ExecuteAll executes all post-processing actions
 // First builds payloads from post.payloads, then executes post.postActions
-func (pae *PostActionExecutor) ExecuteAll(ctx context.Context, postConfig *config_loader.PostConfig, execCtx *ExecutionContext, log logger.Logger) ([]PostActionResult, error) {
+func (pae *PostActionExecutor) ExecuteAll(ctx context.Context, postConfig *config_loader.PostConfig, execCtx *ExecutionContext) ([]PostActionResult, error) {
 	if postConfig == nil {
 		return []PostActionResult{}, nil
 	}
 
 	// Step 1: Build post payloads (like clusterStatusPayload)
 	if len(postConfig.Payloads) > 0 {
-		log.Infof("  Building %d post payloads", len(postConfig.Payloads))
-		if err := buildPostPayloads(postConfig.Payloads, execCtx, log); err != nil {
-			log.Error(fmt.Sprintf("  Failed to build post payloads: %v", err))
+		pae.log.Infof(ctx, "  Building %d post payloads", len(postConfig.Payloads))
+		if err := pae.buildPostPayloads(ctx, postConfig.Payloads, execCtx); err != nil {
+			pae.log.Errorf(ctx, "  Failed to build post payloads: %v", err)
 			execCtx.Adapter.ExecutionError = &ExecutionError{
 				Phase:   string(PhasePostActions),
 				Step:    "build_payloads",
@@ -43,31 +46,31 @@ func (pae *PostActionExecutor) ExecuteAll(ctx context.Context, postConfig *confi
 			return []PostActionResult{}, NewExecutorError(PhasePostActions, "build_payloads", "failed to build post payloads", err)
 		}
 		for _, payload := range postConfig.Payloads {
-			log.V(1).Infof("    payload[%s] built successfully", payload.Name)
+			pae.log.Debugf(ctx, "payload[%s] built successfully", payload.Name)
 		}
 	}
 
 	// Step 2: Execute post actions (sequential - stop on first failure)
 	results := make([]PostActionResult, 0, len(postConfig.PostActions))
 	for i, action := range postConfig.PostActions {
-		log.Infof("  [PostAction %d/%d] Executing: %s", i+1, len(postConfig.PostActions), action.Name)
-		result, err := pae.executePostAction(ctx, action, execCtx, log)
+		pae.log.Infof(ctx, "  [PostAction %d/%d] Executing: %s", i+1, len(postConfig.PostActions), action.Name)
+		result, err := pae.executePostAction(ctx, action, execCtx)
 		results = append(results, result)
 
 		if err != nil {
-			log.Error(fmt.Sprintf("  [PostAction %d/%d] %s: FAILED - %v", i+1, len(postConfig.PostActions), action.Name, err))
-			
+			pae.log.Errorf(ctx, "  [PostAction %d/%d] %s: FAILED - %v", i+1, len(postConfig.PostActions), action.Name, err)
+
 			// Set ExecutionError for failed post action
 			execCtx.Adapter.ExecutionError = &ExecutionError{
 				Phase:   string(PhasePostActions),
 				Step:    action.Name,
 				Message: err.Error(),
 			}
-			
+
 			// Stop execution - don't run remaining post actions
 			return results, err
 		}
-		log.Infof("  [PostAction %d/%d] %s: SUCCESS ✓", i+1, len(postConfig.PostActions), action.Name)
+		pae.log.Infof(ctx, "  [PostAction %d/%d] %s: SUCCESS ✓", i+1, len(postConfig.PostActions), action.Name)
 	}
 
 	return results, nil
@@ -75,12 +78,15 @@ func (pae *PostActionExecutor) ExecuteAll(ctx context.Context, postConfig *confi
 
 // buildPostPayloads builds all post payloads and stores them in execCtx.Params
 // Payloads are complex structures built from CEL expressions and templates
-func buildPostPayloads(payloads []config_loader.Payload, execCtx *ExecutionContext, log logger.Logger) error {
+func (pae *PostActionExecutor) buildPostPayloads(ctx context.Context, payloads []config_loader.Payload, execCtx *ExecutionContext) error {
 	// Create evaluation context with all CEL variables (params, adapter, resources)
 	evalCtx := criteria.NewEvaluationContext()
 	evalCtx.SetVariablesFromMap(execCtx.GetCELVariables())
 
-	evaluator := criteria.NewEvaluator(evalCtx, log)
+	evaluator, err := criteria.NewEvaluator(ctx, evalCtx, pae.log)
+	if err != nil {
+		return fmt.Errorf("failed to create evaluator: %w", err)
+	}
 
 	for _, payload := range payloads {
 		// Determine build source (inline Build or BuildRef)
@@ -94,7 +100,7 @@ func buildPostPayloads(payloads []config_loader.Payload, execCtx *ExecutionConte
 		}
 
 		// Build the payload
-		builtPayload, err := buildPayload(buildDef, evaluator, execCtx.Params, log)
+		builtPayload, err := pae.buildPayload(ctx, buildDef, evaluator, execCtx.Params)
 		if err != nil {
 			return fmt.Errorf("failed to build payload '%s': %w", payload.Name, err)
 		}
@@ -114,20 +120,20 @@ func buildPostPayloads(payloads []config_loader.Payload, execCtx *ExecutionConte
 
 // buildPayload builds a payload from a build definition
 // The build definition can contain expressions that need to be evaluated
-func buildPayload(build any, evaluator *criteria.Evaluator, params map[string]any, log logger.Logger) (any, error) {
+func (pae *PostActionExecutor) buildPayload(ctx context.Context, build any, evaluator *criteria.Evaluator, params map[string]any) (any, error) {
 	switch v := build.(type) {
 	case map[string]any:
-		return buildMapPayload(v, evaluator, params, log)
+		return pae.buildMapPayload(ctx, v, evaluator, params)
 	case map[any]any:
 		converted := convertToStringKeyMap(v)
-		return buildMapPayload(converted, evaluator, params, log)
+		return pae.buildMapPayload(ctx, converted, evaluator, params)
 	default:
 		return build, nil
 	}
 }
 
 // buildMapPayload builds a map payload, evaluating expressions as needed
-func buildMapPayload(m map[string]any, evaluator *criteria.Evaluator, params map[string]any, log logger.Logger) (map[string]any, error) {
+func (pae *PostActionExecutor) buildMapPayload(ctx context.Context, m map[string]any, evaluator *criteria.Evaluator, params map[string]any) (map[string]any, error) {
 	result := make(map[string]any)
 
 	for k, v := range m {
@@ -138,7 +144,7 @@ func buildMapPayload(m map[string]any, evaluator *criteria.Evaluator, params map
 		}
 
 		// Process the value
-		processedValue, err := processValue(v, evaluator, params, log)
+		processedValue, err := pae.processValue(ctx, v, evaluator, params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process value for key '%s': %w", k, err)
 		}
@@ -150,14 +156,14 @@ func buildMapPayload(m map[string]any, evaluator *criteria.Evaluator, params map
 }
 
 // processValue processes a value, evaluating expressions as needed
-func processValue(v any, evaluator *criteria.Evaluator, params map[string]any, log logger.Logger) (any, error) {
+func (pae *PostActionExecutor) processValue(ctx context.Context, v any, evaluator *criteria.Evaluator, params map[string]any) (any, error) {
 	switch val := v.(type) {
 	case map[string]any:
 		// Check if this is an expression definition
 		if result, ok := evaluator.EvaluateExpressionDef(val); ok {
 			return result, nil
 		}
-		
+
 		// Check if this is a simple value definition
 		if value, ok := criteria.GetValueDef(val); ok {
 			// Render template if it's a string
@@ -168,16 +174,16 @@ func processValue(v any, evaluator *criteria.Evaluator, params map[string]any, l
 		}
 
 		// Recursively process nested maps
-		return buildMapPayload(val, evaluator, params, log)
+		return pae.buildMapPayload(ctx, val, evaluator, params)
 
 	case map[any]any:
 		converted := convertToStringKeyMap(val)
-		return processValue(converted, evaluator, params, log)
+		return pae.processValue(ctx, converted, evaluator, params)
 
 	case []any:
 		result := make([]any, len(val))
 		for i, item := range val {
-			processed, err := processValue(item, evaluator, params, log)
+			processed, err := pae.processValue(ctx, item, evaluator, params)
 			if err != nil {
 				return nil, err
 			}
@@ -194,7 +200,7 @@ func processValue(v any, evaluator *criteria.Evaluator, params map[string]any, l
 }
 
 // executePostAction executes a single post-action
-func (pae *PostActionExecutor) executePostAction(ctx context.Context, action config_loader.PostAction, execCtx *ExecutionContext, log logger.Logger) (PostActionResult, error) {
+func (pae *PostActionExecutor) executePostAction(ctx context.Context, action config_loader.PostAction, execCtx *ExecutionContext) (PostActionResult, error) {
 	result := PostActionResult{
 		Name:   action.Name,
 		Status: StatusSuccess,
@@ -202,24 +208,24 @@ func (pae *PostActionExecutor) executePostAction(ctx context.Context, action con
 
 	// Execute log action if configured
 	if action.Log != nil {
-		ExecuteLogAction(action.Log, execCtx, log)
+		ExecuteLogAction(ctx, action.Log, execCtx, pae.log)
 	}
 
 	// Execute API call if configured
 	if action.APICall != nil {
-		log.Infof("    Making API call: %s %s", action.APICall.Method, action.APICall.URL)
-		if err := pae.executeAPICall(ctx, action.APICall, execCtx, &result, log); err != nil {
+		pae.log.Infof(ctx, "    Making API call: %s %s", action.APICall.Method, action.APICall.URL)
+		if err := pae.executeAPICall(ctx, action.APICall, execCtx, &result); err != nil {
 			return result, err
 		}
-		log.Infof("    API call successful: HTTP %d", result.HTTPStatus)
+		pae.log.Infof(ctx, "    API call successful: HTTP %d", result.HTTPStatus)
 	}
 
 	return result, nil
 }
 
 // executeAPICall executes an API call and populates the result with response details
-func (pae *PostActionExecutor) executeAPICall(ctx context.Context, apiCall *config_loader.APICall, execCtx *ExecutionContext, result *PostActionResult, log logger.Logger) error {
-	resp, url, err := ExecuteAPICall(ctx, apiCall, execCtx, pae.apiClient, log)
+func (pae *PostActionExecutor) executeAPICall(ctx context.Context, apiCall *config_loader.APICall, execCtx *ExecutionContext, result *PostActionResult) error {
+	resp, url, err := ExecuteAPICall(ctx, apiCall, execCtx, pae.apiClient, pae.log)
 	result.APICallMade = true
 
 	// Capture response details if available (even if err != nil)
@@ -232,13 +238,13 @@ func (pae *PostActionExecutor) executeAPICall(ctx context.Context, apiCall *conf
 	if validationErr := ValidateAPIResponse(resp, err, apiCall.Method, url); validationErr != nil {
 		result.Status = StatusFailed
 		result.Error = validationErr
-		
+
 		// Determine error context
 		errorContext := "API call failed"
 		if err == nil && resp != nil && !resp.IsSuccess() {
 			errorContext = "API call returned non-success status"
 		}
-		
+
 		return NewExecutorError(PhasePostActions, result.Name, errorContext, validationErr)
 	}
 

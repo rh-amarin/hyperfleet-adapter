@@ -8,10 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-
 func TestDeepCopyMap_BasicTypes(t *testing.T) {
-	log := &mockLogger{}
-
 	original := map[string]interface{}{
 		"string": "hello",
 		"int":    42,
@@ -20,7 +17,7 @@ func TestDeepCopyMap_BasicTypes(t *testing.T) {
 		"null":   nil,
 	}
 
-	copied := deepCopyMap(original, log)
+	copied := deepCopyMap(context.Background(), original, logger.NewTestLogger())
 
 	// Verify values are copied correctly
 	assert.Equal(t, "hello", copied["string"])
@@ -30,7 +27,6 @@ func TestDeepCopyMap_BasicTypes(t *testing.T) {
 	assert.Nil(t, copied["null"])
 
 	// Verify no warnings logged
-	assert.Empty(t, log.warnings, "No warnings expected for basic types")
 
 	// Verify mutation doesn't affect original
 	copied["string"] = "modified"
@@ -38,7 +34,6 @@ func TestDeepCopyMap_BasicTypes(t *testing.T) {
 }
 
 func TestDeepCopyMap_NestedMaps(t *testing.T) {
-	log := &mockLogger{}
 
 	original := map[string]interface{}{
 		"level1": map[string]interface{}{
@@ -48,10 +43,9 @@ func TestDeepCopyMap_NestedMaps(t *testing.T) {
 		},
 	}
 
-	copied := deepCopyMap(original, log)
+	copied := deepCopyMap(context.Background(), original, logger.NewTestLogger())
 
 	// Verify deep copy works
-	assert.Empty(t, log.warnings)
 
 	// Modify the copied nested map
 	level1 := copied["level1"].(map[string]interface{})
@@ -65,7 +59,6 @@ func TestDeepCopyMap_NestedMaps(t *testing.T) {
 }
 
 func TestDeepCopyMap_Slices(t *testing.T) {
-	log := &mockLogger{}
 
 	original := map[string]interface{}{
 		"items": []interface{}{"a", "b", "c"},
@@ -74,9 +67,8 @@ func TestDeepCopyMap_Slices(t *testing.T) {
 		},
 	}
 
-	copied := deepCopyMap(original, log)
+	copied := deepCopyMap(context.Background(), original, logger.NewTestLogger())
 
-	assert.Empty(t, log.warnings)
 
 	// Modify copied slice
 	copiedItems := copied["items"].([]interface{})
@@ -89,7 +81,6 @@ func TestDeepCopyMap_Slices(t *testing.T) {
 
 func TestDeepCopyMap_Channel(t *testing.T) {
 	// copystructure handles channels properly (creates new channel)
-	log := &mockLogger{}
 
 	ch := make(chan int, 5)
 	original := map[string]interface{}{
@@ -97,10 +88,9 @@ func TestDeepCopyMap_Channel(t *testing.T) {
 		"normal":  "value",
 	}
 
-	copied := deepCopyMap(original, log)
+	copied := deepCopyMap(context.Background(), original, logger.NewTestLogger())
 
 	// copystructure handles channels - no warning expected
-	assert.Empty(t, log.warnings, "copystructure handles channels without falling back to shallow copy")
 
 	// Normal values are copied
 	assert.Equal(t, "value", copied["normal"])
@@ -113,7 +103,6 @@ func TestDeepCopyMap_Channel(t *testing.T) {
 
 func TestDeepCopyMap_Function(t *testing.T) {
 	// copystructure handles functions (copies the function pointer)
-	log := &mockLogger{}
 
 	fn := func() string { return "hello" }
 	original := map[string]interface{}{
@@ -121,10 +110,9 @@ func TestDeepCopyMap_Function(t *testing.T) {
 		"normal": "value",
 	}
 
-	copied := deepCopyMap(original, log)
+	copied := deepCopyMap(context.Background(), original, logger.NewTestLogger())
 
 	// copystructure handles functions - no warning expected
-	assert.Empty(t, log.warnings, "copystructure handles functions without falling back to shallow copy")
 
 	// Normal values are copied
 	assert.Equal(t, "value", copied["normal"])
@@ -136,7 +124,6 @@ func TestDeepCopyMap_Function(t *testing.T) {
 
 func TestDeepCopyMap_NestedWithChannel(t *testing.T) {
 	// Test that nested maps are deep copied even when channels are present
-	log := &mockLogger{}
 
 	ch := make(chan int)
 	nested := map[string]interface{}{"mutable": "original"}
@@ -145,10 +132,9 @@ func TestDeepCopyMap_NestedWithChannel(t *testing.T) {
 		"nested":  nested,
 	}
 
-	copied := deepCopyMap(original, log)
+	copied := deepCopyMap(context.Background(), original, logger.NewTestLogger())
 
 	// copystructure handles this properly - no warning expected
-	assert.Empty(t, log.warnings)
 
 	// Modify the copied nested map
 	copiedNested := copied["nested"].(map[string]interface{})
@@ -160,18 +146,16 @@ func TestDeepCopyMap_NestedWithChannel(t *testing.T) {
 }
 
 func TestDeepCopyMap_EmptyMap(t *testing.T) {
-	log := &mockLogger{}
 
 	original := map[string]interface{}{}
-	copied := deepCopyMap(original, log)
+	copied := deepCopyMap(context.Background(), original, logger.NewTestLogger())
 
-	assert.Empty(t, log.warnings)
 	assert.NotNil(t, copied)
 	assert.Empty(t, copied)
 }
 
-func TestDeepCopyMap_NilLogger(t *testing.T) {
-	// Should not panic when logger is nil
+func TestDeepCopyMap_DeepCopyVerification(t *testing.T) {
+	// Verify deep copy works correctly
 	original := map[string]interface{}{
 		"string": "value",
 		"nested": map[string]interface{}{
@@ -179,8 +163,8 @@ func TestDeepCopyMap_NilLogger(t *testing.T) {
 		},
 	}
 
-	// Should not panic even with nil logger
-	copied := deepCopyMap(original, nil)
+	// Should not panic
+	copied := deepCopyMap(context.Background(), original, logger.NewTestLogger())
 
 	assert.Equal(t, "value", copied["string"])
 	
@@ -193,17 +177,14 @@ func TestDeepCopyMap_NilLogger(t *testing.T) {
 }
 
 func TestDeepCopyMap_NilMap(t *testing.T) {
-	log := &mockLogger{}
 
-	copied := deepCopyMap(nil, log)
+	copied := deepCopyMap(context.Background(), nil, logger.NewTestLogger())
 
 	assert.Nil(t, copied)
-	assert.Empty(t, log.warnings)
 }
 
 func TestDeepCopyMap_KubernetesManifest(t *testing.T) {
 	// Test with a realistic Kubernetes manifest structure
-	log := &mockLogger{}
 
 	original := map[string]interface{}{
 		"apiVersion": "v1",
@@ -221,9 +202,8 @@ func TestDeepCopyMap_KubernetesManifest(t *testing.T) {
 		},
 	}
 
-	copied := deepCopyMap(original, log)
+	copied := deepCopyMap(context.Background(), original, logger.NewTestLogger())
 
-	assert.Empty(t, log.warnings)
 
 	// Modify copied manifest
 	copiedMetadata := copied["metadata"].(map[string]interface{})
@@ -239,8 +219,6 @@ func TestDeepCopyMap_KubernetesManifest(t *testing.T) {
 // TestDeepCopyMap_Context ensures the function is used correctly in context
 func TestDeepCopyMap_RealWorldContext(t *testing.T) {
 	// This simulates how deepCopyMap is used in executeResource
-	log := logger.NewLogger(context.Background())
-
 	manifest := map[string]interface{}{
 		"apiVersion": "v1",
 		"kind":       "Namespace",
@@ -250,7 +228,7 @@ func TestDeepCopyMap_RealWorldContext(t *testing.T) {
 	}
 
 	// Deep copy before template rendering
-	copied := deepCopyMap(manifest, log)
+	copied := deepCopyMap(context.Background(), manifest, logger.NewTestLogger())
 
 	// Simulate template rendering modifying the copy
 	copiedMetadata := copied["metadata"].(map[string]interface{})

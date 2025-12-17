@@ -1,8 +1,10 @@
 package criteria
 
 import (
+	"context"
 	"testing"
 
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,8 +44,9 @@ func TestRealWorldScenario(t *testing.T) {
 	ctx.Set("vpcId", "vpc-12345")
 	ctx.Set("nodeCount", 5)
 	
-	evaluator := NewEvaluator(ctx, nil)
-	
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
+
 	// Test precondition conditions from the template
 	t.Run("clusterPhase in valid phases", func(t *testing.T) {
 		result, err := evaluator.EvaluateCondition(
@@ -116,8 +119,9 @@ func TestResourceStatusEvaluation(t *testing.T) {
 	
 	ctx.Set("resources", resources)
 	
-	evaluator := NewEvaluator(ctx, nil)
-	
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
+
 	t.Run("namespace is active", func(t *testing.T) {
 		result, err := evaluator.EvaluateCondition(
 			"resources.clusterNamespace.status.phase",
@@ -133,8 +137,8 @@ func TestResourceStatusEvaluation(t *testing.T) {
 		localCtx := NewEvaluationContext()
 		localCtx.Set("replicas", 3)
 		localCtx.Set("readyReplicas", 3)
-		localEvaluator := NewEvaluator(localCtx, nil)
-
+		localEvaluator, err := NewEvaluator(context.Background(), localCtx, logger.NewTestLogger())
+		require.NoError(t, err)
 		result, err := localEvaluator.EvaluateCondition(
 			"replicas",
 			OperatorEquals,
@@ -166,8 +170,9 @@ func TestComplexNestedConditions(t *testing.T) {
 		},
 	})
 	
-	evaluator := NewEvaluator(ctx, nil)
-	
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
+
 	t.Run("adapter execution successful", func(t *testing.T) {
 		result, err := evaluator.EvaluateCondition(
 			"adapter.executionStatus",
@@ -206,7 +211,8 @@ func TestMapKeyContainment(t *testing.T) {
 		"owner":       "team-a",
 	})
 
-	evaluator := NewEvaluator(ctx, nil)
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	t.Run("map contains key - found", func(t *testing.T) {
 		result, err := evaluator.EvaluateCondition(
@@ -257,8 +263,9 @@ func TestTerminatingClusterScenario(t *testing.T) {
 	ctx.Set("cloudProvider", "aws")
 	ctx.Set("vpcId", "vpc-12345")
 	
-	evaluator := NewEvaluator(ctx, nil)
-	
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
+
 	t.Run("terminating cluster fails preconditions", func(t *testing.T) {
 		// Cluster in "Terminating" phase should NOT be in allowed phases
 		result, err := evaluator.EvaluateCondition(
@@ -337,7 +344,8 @@ func TestNodeCountValidation(t *testing.T) {
 			ctx.Set("minNodes", tt.minNodes)
 			ctx.Set("maxNodes", tt.maxNodes)
 
-			evaluator := NewEvaluator(ctx, nil)
+			evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+			require.NoError(t, err)
 
 			// Check if nodeCount >= minNodes
 			result1, err := evaluator.EvaluateCondition(

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/criteria"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
 	apierrors "github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/errors"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -770,11 +772,11 @@ func TestExecuteLogAction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			log := &mockLogger{}
+			log := logger.NewTestLogger()
 			execCtx := &ExecutionContext{Params: tt.params}
 
 			// This should not panic
-			ExecuteLogAction(tt.logAction, execCtx, log)
+			ExecuteLogAction(context.Background(), tt.logAction, execCtx, log)
 
 			// We don't verify the exact log output, just that it doesn't error
 		})

@@ -1,19 +1,21 @@
 package criteria
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewCELEvaluator(t *testing.T) {
+func Test_newCELEvaluator(t *testing.T) {
 	ctx := NewEvaluationContext()
 	ctx.Set("status", "Ready")
 	ctx.Set("replicas", 3)
 
-	evaluator, err := NewCELEvaluator(ctx, nil)
+	evaluator, err := newCELEvaluator(context.Background(), ctx, logger.NewTestLogger())
 	require.NoError(t, err)
 	require.NotNil(t, evaluator)
 }
@@ -25,7 +27,7 @@ func TestCELEvaluatorEvaluate(t *testing.T) {
 	ctx.Set("provider", "aws")
 	ctx.Set("enabled", true)
 
-	evaluator, err := NewCELEvaluator(ctx, nil)
+	evaluator, err := newCELEvaluator(context.Background(), ctx, logger.NewTestLogger())
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -129,7 +131,7 @@ func TestCELEvaluatorWithNestedData(t *testing.T) {
 		},
 	})
 
-	evaluator, err := NewCELEvaluator(ctx, nil)
+	evaluator, err := newCELEvaluator(context.Background(), ctx, logger.NewTestLogger())
 	require.NoError(t, err)
 
 	// Test nested field access
@@ -154,7 +156,7 @@ func TestCELEvaluatorEvaluateSafe(t *testing.T) {
 	})
 	ctx.Set("nullValue", nil)
 
-	evaluator, err := NewCELEvaluator(ctx, nil)
+	evaluator, err := newCELEvaluator(context.Background(), ctx, logger.NewTestLogger())
 	require.NoError(t, err)
 
 	t.Run("successful evaluation", func(t *testing.T) {
@@ -245,7 +247,7 @@ func TestCELEvaluatorEvaluateBool(t *testing.T) {
 	ctx := NewEvaluationContext()
 	ctx.Set("status", "Ready")
 
-	evaluator, err := NewCELEvaluator(ctx, nil)
+	evaluator, err := newCELEvaluator(context.Background(), ctx, logger.NewTestLogger())
 	require.NoError(t, err)
 
 	// True result
@@ -264,7 +266,7 @@ func TestCELEvaluatorEvaluateString(t *testing.T) {
 	ctx.Set("status", "Ready")
 	ctx.Set("name", "test-cluster")
 
-	evaluator, err := NewCELEvaluator(ctx, nil)
+	evaluator, err := newCELEvaluator(context.Background(), ctx, logger.NewTestLogger())
 	require.NoError(t, err)
 
 	// String result
@@ -440,8 +442,8 @@ func TestEvaluatorCELIntegration(t *testing.T) {
 	ctx.Set("replicas", 3)
 	ctx.Set("provider", "aws")
 
-	evaluator := NewEvaluator(ctx, nil)
-
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 	// Test EvaluateCEL
 	result, err := evaluator.EvaluateCEL(`status == "Ready" && replicas > 1`)
 	require.NoError(t, err)
@@ -469,8 +471,8 @@ func TestEvaluatorCELIntegration(t *testing.T) {
 
 func TestGetCELExpression(t *testing.T) {
 	ctx := NewEvaluationContext()
-	evaluator := NewEvaluator(ctx, nil)
-
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 	// Single condition
 	expr, err := evaluator.GetCELExpression("status", OperatorEquals, "Ready")
 	require.NoError(t, err)
@@ -532,7 +534,7 @@ func TestEvaluateSafeErrorHandling(t *testing.T) {
 		},
 	})
 
-	evaluator, err := NewCELEvaluator(ctx, nil)
+	evaluator, err := newCELEvaluator(context.Background(), ctx, logger.NewTestLogger())
 	require.NoError(t, err)
 
 	tests := []struct {

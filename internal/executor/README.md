@@ -275,7 +275,6 @@ post:
 
 ```go
 type ExecutionResult struct {
-    EventID             string
     Status              ExecutionStatus  // success, failed (process execution perspective)
     Phase               ExecutionPhase   // where execution ended
     Params              map[string]interface{}

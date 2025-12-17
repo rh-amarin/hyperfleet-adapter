@@ -789,7 +789,7 @@ func TestValidateManifestItems(t *testing.T) {
 			},
 		}
 
-		err := Validate(config)
+		err := newValidator(config).Validate()
 		assert.NoError(t, err)
 	})
 
@@ -825,7 +825,7 @@ func TestValidateManifestItems(t *testing.T) {
 			},
 		}
 
-		err := Validate(config)
+		err := newValidator(config).Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "manifestItems[1]")
 		assert.Contains(t, err.Error(), "missing required Kubernetes field")

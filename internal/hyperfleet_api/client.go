@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/glog"
 	apierrors "github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/errors"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 )
 
 // Environment variables for API configuration
@@ -31,6 +31,7 @@ const (
 type httpClient struct {
 	client *http.Client
 	config *ClientConfig
+	log    logger.Logger
 }
 
 // ClientOption is a functional option for configuring the client
@@ -104,6 +105,7 @@ func WithBaseURL(baseURL string) ClientOption {
 	}
 }
 
+
 // NewClient creates a new HyperFleet API client.
 //
 // Base URL resolution order:
@@ -114,9 +116,10 @@ func WithBaseURL(baseURL string) ClientOption {
 // This function owns the environment variable fallback logic; callers should
 // pass the configured value via WithBaseURL if available, otherwise NewClient
 // reads the env var as a last resort.
-func NewClient(opts ...ClientOption) (Client, error) {
+func NewClient(log logger.Logger, opts ...ClientOption) (Client, error) {
 	c := &httpClient{
 		config: DefaultClientConfig(),
+		log:    log,
 	}
 
 	// Apply options (including WithBaseURL if provided by caller)
@@ -196,7 +199,7 @@ func (c *httpClient) Do(ctx context.Context, req *Request) (*Response, error) {
 		resp, err := c.doRequest(ctx, req)
 		if err != nil {
 			lastErr = err
-			glog.Warningf("HyperFleet API request failed (attempt %d/%d): %v", attempt, retryAttempts, err)
+			c.log.Warnf(ctx, "HyperFleet API request failed (attempt %d/%d): %v", attempt, retryAttempts, err)
 		} else {
 			resp.Attempts = attempt
 			resp.Duration = time.Since(startTime)
@@ -208,14 +211,14 @@ func (c *httpClient) Do(ctx context.Context, req *Request) (*Response, error) {
 
 			lastResp = resp
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
-			glog.Warningf("HyperFleet API request returned retryable status %d (attempt %d/%d)",
+			c.log.Warnf(ctx, "HyperFleet API request returned retryable status %d (attempt %d/%d)",
 				resp.StatusCode, attempt, retryAttempts)
 		}
 
 		// Don't sleep after the last attempt
 		if attempt < retryAttempts {
 			delay := c.calculateBackoff(attempt, backoffStrategy)
-			glog.Infof("Retrying in %v...", delay)
+			c.log.Infof(ctx, "Retrying in %v...", delay)
 
 			select {
 			case <-ctx.Done():
@@ -303,7 +306,7 @@ func (c *httpClient) doRequest(ctx context.Context, req *Request) (*Response, er
 	}
 
 	// Execute request
-	glog.V(2).Infof("HyperFleet API request: %s %s", req.Method, req.URL)
+	c.log.Debugf(ctx, "HyperFleet API request: %s %s", req.Method, req.URL)
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
@@ -323,7 +326,7 @@ func (c *httpClient) doRequest(ctx context.Context, req *Request) (*Response, er
 		Body:       respBody,
 	}
 
-	glog.V(2).Infof("HyperFleet API response: %d %s", response.StatusCode, response.Status)
+	c.log.Debugf(ctx, "HyperFleet API response: %d %s", response.StatusCode, response.Status)
 
 	return response, nil
 }
@@ -433,4 +436,3 @@ func (c *httpClient) Delete(ctx context.Context, url string, opts ...RequestOpti
 func (c *httpClient) BaseURL() string {
 	return c.config.BaseURL
 }
-

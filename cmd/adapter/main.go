@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/golang/glog"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/config_loader"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/executor"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
@@ -29,7 +28,12 @@ var (
 )
 
 // Command-line flags
-var configPath string
+var (
+	configPath string
+	logLevel   string
+	logFormat  string
+	logOutput  string
+)
 
 // Environment variable names
 const (
@@ -38,10 +42,6 @@ const (
 )
 
 func main() {
-	// Set glog to log to stderr by default (required for containers with read-only filesystems)
-	// This can be overridden by --logtostderr=false if needed
-	_ = flag.Set("logtostderr", "true")
-
 	// Root command
 	rootCmd := &cobra.Command{
 		Use:   "adapter",
@@ -55,7 +55,7 @@ and HyperFleet API calls.`,
 		},
 	}
 
-	// Add glog flags to root command (so they work on all subcommands)
+	// Add flags to root command (so they work on all subcommands)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 
 	// Serve command
@@ -75,6 +75,14 @@ and HyperFleet API calls.`,
 	// Add --config flag to serve command
 	serveCmd.Flags().StringVarP(&configPath, "config", "c", "",
 		fmt.Sprintf("Path to adapter configuration file (can also use %s env var)", config_loader.EnvConfigPath))
+
+	// Add logging flags to serve command
+	serveCmd.Flags().StringVar(&logLevel, "log-level", "",
+		"Log level (debug, info, warn, error). Env: LOG_LEVEL")
+	serveCmd.Flags().StringVar(&logFormat, "log-format", "",
+		"Log format (text, json). Env: LOG_FORMAT")
+	serveCmd.Flags().StringVar(&logOutput, "log-output", "",
+		"Log output (stdout, stderr). Env: LOG_OUTPUT")
 
 	// Version command
 	versionCmd := &cobra.Command{
@@ -101,51 +109,74 @@ and HyperFleet API calls.`,
 
 // runServe contains the main application logic for the serve command
 func runServe() error {
-	// Flush logs when runServe() exits
-	defer glog.Flush()
-
 	// Create context that cancels on system signals
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create logger with context
-	log := logger.NewLogger(ctx)
+	// Build logger configuration from flags and environment
+	logConfig := logger.ConfigFromEnv()
+	// Override with command-line flags if provided
+	if logLevel != "" {
+		logConfig.Level = logLevel
+	}
+	if logFormat != "" {
+		logConfig.Format = logFormat
+	}
+	if logOutput != "" {
+		logConfig.Output = logOutput
+	}
+	logConfig.Component = "hyperfleet-adapter" // Bootstrap component, will be updated after config load
+	logConfig.Version = version
 
-	log.Infof("Starting Hyperfleet Adapter version=%s commit=%s built=%s tag=%s", version, commit, buildDate, tag)
+	// Create bootstrap logger (before config is loaded)
+	log, err := logger.NewLogger(logConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create logger: %w", err)
+	}
+
+	log.Infof(ctx, "Starting Hyperfleet Adapter version=%s commit=%s built=%s tag=%s", version, commit, buildDate, tag)
 
 	// Load adapter configuration
 	// If configPath flag is empty, config_loader.Load will read from ADAPTER_CONFIG_PATH env var
-	log.Info("Loading adapter configuration...")
+	log.Info(ctx, "Loading adapter configuration...")
 	adapterConfig, err := config_loader.Load(configPath, config_loader.WithAdapterVersion(version))
 	if err != nil {
-		log.Error(fmt.Sprintf("Failed to load adapter configuration: %v", err))
+		log.Errorf(ctx, "Failed to load adapter configuration: %v", err)
 		return fmt.Errorf("failed to load adapter configuration: %w", err)
 	}
-	log.Infof("Adapter configuration loaded successfully: name=%s namespace=%s",
+
+	// Recreate logger with component from adapter config
+	logConfig.Component = adapterConfig.Metadata.Name
+	log, err = logger.NewLogger(logConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create logger with adapter config: %w", err)
+	}
+
+	log.Infof(ctx, "Adapter configuration loaded successfully: name=%s namespace=%s",
 		adapterConfig.Metadata.Name, adapterConfig.Metadata.Namespace)
-	log.Infof("HyperFleet API client configured: timeout=%s retryAttempts=%d",
+	log.Infof(ctx, "HyperFleet API client configured: timeout=%s retryAttempts=%d",
 		adapterConfig.Spec.HyperfleetAPI.Timeout,
 		adapterConfig.Spec.HyperfleetAPI.RetryAttempts)
 
 	// Create HyperFleet API client from config
-	log.Info("Creating HyperFleet API client...")
-	apiClient, err := createAPIClient(adapterConfig.Spec.HyperfleetAPI)
+	log.Info(ctx, "Creating HyperFleet API client...")
+	apiClient, err := createAPIClient(adapterConfig.Spec.HyperfleetAPI, log)
 	if err != nil {
-		log.Error(fmt.Sprintf("Failed to create HyperFleet API client: %v", err))
+		log.Errorf(ctx, "Failed to create HyperFleet API client: %v", err)
 		return fmt.Errorf("failed to create HyperFleet API client: %w", err)
 	}
 
 	// Create Kubernetes client
 	// Uses KUBECONFIG env var if set, otherwise uses in-cluster config
-	log.Info("Creating Kubernetes client...")
+	log.Info(ctx, "Creating Kubernetes client...")
 	k8sClient, err := k8s_client.NewClient(ctx, k8s_client.ClientConfig{}, log)
 	if err != nil {
-		log.Error(fmt.Sprintf("Failed to create Kubernetes client: %v", err))
+		log.Errorf(ctx, "Failed to create Kubernetes client: %v", err)
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
 	// Create the executor using the builder pattern
-	log.Info("Creating event executor...")
+	log.Info(ctx, "Creating event executor...")
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(adapterConfig).
 		WithAPIClient(apiClient).
@@ -153,7 +184,7 @@ func runServe() error {
 		WithLogger(log).
 		Build()
 	if err != nil {
-		log.Error(fmt.Sprintf("Failed to create executor: %v", err))
+		log.Errorf(ctx, "Failed to create executor: %v", err)
 		return fmt.Errorf("failed to create executor: %w", err)
 	}
 
@@ -170,26 +201,26 @@ func runServe() error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigCh
-		log.Infof("Received signal %s, initiating graceful shutdown...", sig)
+		log.Infof(ctx, "Received signal %s, initiating graceful shutdown...", sig)
 		cancel()
 
 		// Second signal forces immediate exit
 		sig = <-sigCh
-		log.Infof("Received second signal %s, forcing immediate exit", sig)
+		log.Infof(ctx, "Received second signal %s, forcing immediate exit", sig)
 		os.Exit(1)
 	}()
 
 	// Get subscription ID from environment
 	subscriptionID := os.Getenv(EnvBrokerSubscriptionID)
 	if subscriptionID == "" {
-		log.Error(fmt.Sprintf("%s environment variable is required", EnvBrokerSubscriptionID))
+		log.Errorf(ctx, "%s environment variable is required", EnvBrokerSubscriptionID)
 		return fmt.Errorf("%s environment variable is required", EnvBrokerSubscriptionID)
 	}
 
 	// Get topic from environment
 	topic := os.Getenv(EnvBrokerTopic)
 	if topic == "" {
-		log.Error(fmt.Sprintf("%s environment variable is required", EnvBrokerTopic))
+		log.Errorf(ctx, "%s environment variable is required", EnvBrokerTopic)
 		return fmt.Errorf("%s environment variable is required", EnvBrokerTopic)
 	}
 
@@ -199,22 +230,22 @@ func runServe() error {
 	//   - BROKER_GOOGLEPUBSUB_PROJECT_ID: GCP project ID (for googlepubsub)
 	//   - BROKER_RABBITMQ_URL: RabbitMQ URL (for rabbitmq)
 	//   - SUBSCRIBER_PARALLELISM: number of parallel workers (default: 1)
-	log.Info("Creating broker subscriber...")
+	log.Info(ctx, "Creating broker subscriber...")
 	subscriber, err := broker.NewSubscriber(subscriptionID)
 	if err != nil {
-		log.Error(fmt.Sprintf("Failed to create subscriber: %v", err))
+		log.Errorf(ctx, "Failed to create subscriber: %v", err)
 		return fmt.Errorf("failed to create subscriber: %w", err)
 	}
-	log.Info("Broker subscriber created successfully")
+	log.Info(ctx, "Broker subscriber created successfully")
 
 	// Subscribe to topic - this is NON-BLOCKING, it returns immediately after setup
-	log.Info("Subscribing to broker topic...")
+	log.Info(ctx, "Subscribing to broker topic...")
 	err = subscriber.Subscribe(ctx, topic, handler)
 	if err != nil {
-		log.Error(fmt.Sprintf("Failed to subscribe to topic: %v", err))
+		log.Errorf(ctx, "Failed to subscribe to topic: %v", err)
 		return fmt.Errorf("failed to subscribe to topic: %w", err)
 	}
-	log.Info("Successfully subscribed to broker topic")
+	log.Info(ctx, "Successfully subscribed to broker topic")
 
 	// Channel to signal fatal errors from the errors goroutine
 	fatalErrCh := make(chan error, 1)
@@ -222,7 +253,7 @@ func runServe() error {
 	// Monitor subscription errors channel in a separate goroutine
 	go func() {
 		for subErr := range subscriber.Errors() {
-			log.Error(fmt.Sprintf("Subscription error: %v", subErr))
+			log.Errorf(ctx, "Subscription error: %v", subErr)
 			// For critical errors, signal shutdown
 			select {
 			case fatalErrCh <- subErr:
@@ -233,19 +264,19 @@ func runServe() error {
 		}
 	}()
 
-	log.Info("Adapter started, waiting for events...")
+	log.Info(ctx, "Adapter started, waiting for events...")
 
 	// Wait for shutdown signal or fatal subscription error
 	select {
 	case <-ctx.Done():
-		log.Info("Context cancelled, shutting down...")
+		log.Info(ctx, "Context cancelled, shutting down...")
 	case err := <-fatalErrCh:
-		log.Error(fmt.Sprintf("Fatal subscription error, shutting down: %v", err))
+		log.Errorf(ctx, "Fatal subscription error, shutting down: %v", err)
 		cancel() // Cancel context to trigger graceful shutdown
 	}
 
 	// Close subscriber gracefully with timeout
-	log.Info("Closing broker subscriber...")
+	log.Info(ctx, "Closing broker subscriber...")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
@@ -258,21 +289,21 @@ func runServe() error {
 	select {
 	case err := <-closeDone:
 		if err != nil {
-			log.Error(fmt.Sprintf("Error closing subscriber: %v", err))
+			log.Errorf(ctx, "Error closing subscriber: %v", err)
 		} else {
-			log.Info("Subscriber closed successfully")
+			log.Info(ctx, "Subscriber closed successfully")
 		}
 	case <-shutdownCtx.Done():
-		log.Error("Subscriber close timed out after 30 seconds")
+		log.Error(ctx, "Subscriber close timed out after 30 seconds")
 	}
 
-	log.Info("Adapter shutdown complete")
+	log.Info(ctx, "Adapter shutdown complete")
 
 	return nil
 }
 
 // createAPIClient creates a HyperFleet API client from the config
-func createAPIClient(apiConfig config_loader.HyperfleetAPIConfig) (hyperfleet_api.Client, error) {
+func createAPIClient(apiConfig config_loader.HyperfleetAPIConfig, log logger.Logger) (hyperfleet_api.Client, error) {
 	var opts []hyperfleet_api.ClientOption
 
 	// Parse and set timeout using the accessor method
@@ -300,5 +331,5 @@ func createAPIClient(apiConfig config_loader.HyperfleetAPIConfig) (hyperfleet_ap
 		}
 	}
 
-	return hyperfleet_api.NewClient(opts...)
+	return hyperfleet_api.NewClient(log, opts...)
 }

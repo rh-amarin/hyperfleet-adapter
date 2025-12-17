@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cloudevents/sdk-go/v2/event"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/config_loader"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/criteria"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
@@ -38,14 +37,29 @@ const (
 	StatusFailed ExecutionStatus = "failed"
 )
 
+// ResourceRef represents a reference to a HyperFleet resource
+type ResourceRef struct {
+	ID   string `json:"id,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	Href string `json:"href,omitempty"`
+}
+
+// EventData represents the data payload of a HyperFleet CloudEvent
+type EventData struct {
+	ID             string       `json:"id,omitempty"`
+	Kind           string       `json:"kind,omitempty"`
+	Href           string       `json:"href,omitempty"`
+	Generation     int64        `json:"generation,omitempty"`
+	OwnedReference *ResourceRef `json:"owned_reference,omitempty"`
+}
+
 // ExecutorConfig holds configuration for the executor
 type ExecutorConfig struct {
 	// AdapterConfig is the loaded adapter configuration
 	AdapterConfig *config_loader.AdapterConfig
 	// APIClient is the HyperFleet API client
 	APIClient hyperfleet_api.Client
-	// K8sClient is the Kubernetes client (optional, can be nil if not needed)
-	// Use k8s_client.K8sClient interface for easy mocking in tests
+	// K8sClient is the Kubernetes client
 	K8sClient k8s_client.K8sClient
 	// Logger is the logger instance
 	Logger logger.Logger
@@ -57,12 +71,11 @@ type Executor struct {
 	precondExecutor    *PreconditionExecutor
 	resourceExecutor   *ResourceExecutor
 	postActionExecutor *PostActionExecutor
+	log                logger.Logger
 }
 
 // ExecutionResult contains the result of processing an event
 type ExecutionResult struct {
-	// EventID is the ID of the processed event
-	EventID string
 	// Status is the overall execution status (runtime perspective)
 	Status ExecutionStatus
 	// Phase is the phase where execution ended
@@ -167,9 +180,7 @@ type PostActionResult struct {
 type ExecutionContext struct {
 	// Ctx is the Go context
 	Ctx context.Context
-	// Event is the CloudEvent being processed (for metadata only)
-	Event *event.Event
-	// EventData is the parsed CloudEvent data payload
+	// EventData is the parsed event data payload
 	EventData map[string]interface{}
 	// Params holds extracted parameters and captured fields
 	// - Populated during param extraction phase with event/env data
@@ -239,10 +250,9 @@ type ExecutionError struct {
 }
 
 // NewExecutionContext creates a new execution context
-func NewExecutionContext(ctx context.Context, evt *event.Event, eventData map[string]interface{}) *ExecutionContext {
+func NewExecutionContext(ctx context.Context, eventData map[string]interface{}) *ExecutionContext {
 	return &ExecutionContext{
 		Ctx:         ctx,
-		Event:       evt,
 		EventData:   eventData,
 		Params:      make(map[string]interface{}),
 		Resources:   make(map[string]*unstructured.Unstructured),

@@ -21,6 +21,11 @@ type K8sTestEnv struct {
 	cleanup func()
 }
 
+// testLog returns a shared logger for tests (independent of K8s environment)
+func testLog() logger.Logger {
+	return logger.NewTestLogger()
+}
+
 // SetupK8sTestEnv returns the shared K8s test environment
 func SetupK8sTestEnv(t *testing.T) *K8sTestEnv {
 	t.Helper()

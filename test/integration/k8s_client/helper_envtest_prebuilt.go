@@ -97,7 +97,7 @@ func (e *TestEnvPrebuilt) Cleanup(t *testing.T) {
 // Returns an error instead of panicking to allow graceful handling.
 func setupSharedTestEnv() (*TestEnvPrebuilt, error) {
 	ctx := context.Background()
-	log := logger.NewLogger(ctx)
+	log := logger.NewTestLogger()
 
 	// Check that INTEGRATION_ENVTEST_IMAGE is set
 	imageName := os.Getenv("INTEGRATION_ENVTEST_IMAGE")

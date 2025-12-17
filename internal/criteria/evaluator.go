@@ -1,6 +1,7 @@
 package criteria
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -38,8 +39,9 @@ type ConditionsResult struct {
 
 // Evaluator evaluates criteria against an evaluation context
 type Evaluator struct {
-	context *EvaluationContext
+	evalCtx *EvaluationContext
 	log     logger.Logger
+	ctx   context.Context
 
 	// Lazily cached CEL evaluator for repeated CEL evaluations
 	// Recreated when context version changes
@@ -48,15 +50,24 @@ type Evaluator struct {
 	mu             sync.Mutex
 }
 
-// NewEvaluator creates a new criteria evaluator
-func NewEvaluator(ctx *EvaluationContext, log logger.Logger) *Evaluator {
+// NewEvaluator creates a new criteria evaluator.
+// All parameters are required - ctx for logging correlation, evalCtx for CEL data.
+// Returns an error if any required parameter is nil.
+func NewEvaluator(ctx context.Context, evalCtx *EvaluationContext, log logger.Logger) (*Evaluator, error) {
 	if ctx == nil {
-		ctx = NewEvaluationContext()
+		return nil, fmt.Errorf("ctx is required for Evaluator")
+	}
+	if evalCtx == nil {
+		return nil, fmt.Errorf("evalCtx is required for Evaluator")
+	}
+	if log == nil {
+		return nil, fmt.Errorf("log is required for Evaluator")
 	}
 	return &Evaluator{
-		context: ctx,
+		evalCtx: evalCtx,
 		log:     log,
-	}
+		ctx:     ctx,
+	}, nil
 }
 
 // getCELEvaluator returns a cached CEL evaluator, creating it lazily on first use.
@@ -67,11 +78,11 @@ func (e *Evaluator) getCELEvaluator() (*CELEvaluator, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	currentVersion := e.context.Version()
+	currentVersion := e.evalCtx.Version()
 	
 	// Recreate CEL evaluator if context changed or not yet created
 	if e.celEval == nil || e.celEvalVersion != currentVersion {
-		celEval, err := NewCELEvaluator(e.context, e.log)
+		celEval, err := newCELEvaluator(e.ctx, e.evalCtx, e.log)
 		if err != nil {
 			return nil, err
 		}
@@ -84,12 +95,12 @@ func (e *Evaluator) getCELEvaluator() (*CELEvaluator, error) {
 
 // GetField extracts a field value from the context using dot notation
 func (e *Evaluator) GetField(field string) (interface{}, error) {
-	return e.context.GetNestedField(field)
+	return e.evalCtx.GetNestedField(field)
 }
 
 // GetFieldOrDefault extracts a field value or returns a default if not found or null
 func (e *Evaluator) GetFieldOrDefault(field string, defaultValue interface{}) interface{} {
-	value, err := e.context.GetNestedField(field)
+	value, err := e.evalCtx.GetNestedField(field)
 	if err != nil || value == nil {
 		return defaultValue
 	}
@@ -98,13 +109,13 @@ func (e *Evaluator) GetFieldOrDefault(field string, defaultValue interface{}) in
 
 // GetFieldSafe extracts a field value, returning nil for any error (null-safe)
 func (e *Evaluator) GetFieldSafe(field string) interface{} {
-	value, _ := e.context.GetNestedField(field)
+	value, _ := e.evalCtx.GetNestedField(field)
 	return value
 }
 
 // HasField checks if a field exists and is not null
 func (e *Evaluator) HasField(field string) bool {
-	value, err := e.context.GetNestedField(field)
+	value, err := e.evalCtx.GetNestedField(field)
 	return err == nil && value != nil
 }
 
@@ -129,7 +140,7 @@ func (e *Evaluator) EvaluateConditionSafe(field string, operator Operator, value
 // EvaluateConditionWithResult evaluates a single condition and returns detailed result
 func (e *Evaluator) EvaluateConditionWithResult(field string, operator Operator, value interface{}) (*EvaluationResult, error) {
 	// Get the field value from context
-	fieldValue, err := e.context.GetNestedField(field)
+	fieldValue, err := e.evalCtx.GetNestedField(field)
 	if err != nil {
 		return nil, &EvaluationError{
 			Field:   field,

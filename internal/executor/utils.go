@@ -36,7 +36,7 @@ func ToConditionDefs(conditions []config_loader.Condition) []criteria.ConditionD
 // ExecuteLogAction executes a log action with the given context
 // The message is rendered as a Go template with access to all params
 // This is a shared utility function used by both PreconditionExecutor and PostActionExecutor
-func ExecuteLogAction(logAction *config_loader.LogAction, execCtx *ExecutionContext, log logger.Logger) {
+func ExecuteLogAction(ctx context.Context, logAction *config_loader.LogAction, execCtx *ExecutionContext, log logger.Logger) {
 	if logAction == nil || logAction.Message == "" {
 		return
 	}
@@ -44,7 +44,7 @@ func ExecuteLogAction(logAction *config_loader.LogAction, execCtx *ExecutionCont
 	// Render the message template
 	message, err := renderTemplate(logAction.Message, execCtx.Params)
 	if err != nil {
-		log.Error(fmt.Sprintf("failed to render log message: %v", err))
+		log.Errorf(ctx, "failed to render log message: %v", err)
 		return
 	}
 
@@ -56,15 +56,15 @@ func ExecuteLogAction(logAction *config_loader.LogAction, execCtx *ExecutionCont
 
 	switch level {
 	case "debug":
-		log.V(2).Infof("[config] %s", message)
+		log.Debugf(ctx, "[config] %s", message)
 	case "info":
-		log.Infof("[config] %s", message)
+		log.Infof(ctx, "[config] %s", message)
 	case "warning", "warn":
-		log.Warning(fmt.Sprintf("[config] %s", message))
+		log.Warnf(ctx, "[config] %s", message)
 	case "error":
-		log.Error(fmt.Sprintf("[config] %s", message))
+		log.Errorf(ctx, "[config] %s", message)
 	default:
-		log.Infof("[config] %s", message)
+		log.Infof(ctx, "[config] %s", message)
 	}
 
 }
@@ -84,7 +84,7 @@ func ExecuteAPICall(ctx context.Context, apiCall *config_loader.APICall, execCtx
 		return nil, "", fmt.Errorf("failed to render URL template: %w", err)
 	}
 
-	log.Infof("Making API call: %s %s", apiCall.Method, url)
+	log.Infof(ctx, "Making API call: %s %s", apiCall.Method, url)
 
 	// Build request options
 	opts := make([]hyperfleet_api.RequestOption, 0)
@@ -108,7 +108,7 @@ func ExecuteAPICall(ctx context.Context, apiCall *config_loader.APICall, execCtx
 		if err == nil {
 			opts = append(opts, hyperfleet_api.WithRequestTimeout(timeout))
 		} else {
-			log.Warning(fmt.Sprintf("failed to parse timeout '%s': %v, using default timeout", apiCall.Timeout, err))
+			log.Warnf(ctx, "failed to parse timeout '%s': %v, using default timeout", apiCall.Timeout, err)
 		}
 	}
 
@@ -137,7 +137,7 @@ func ExecuteAPICall(ctx context.Context, apiCall *config_loader.APICall, execCtx
 		resp, err = apiClient.Post(ctx, url, body, opts...)
 		// Log body on failure for debugging
 		if err != nil || (resp != nil && !resp.IsSuccess()) {
-			log.Error(fmt.Sprintf("POST %s failed, request body: %s", url, string(body)))
+			log.Errorf(ctx, "POST %s failed, request body: %s", url, string(body))
 		}
 	case http.MethodPut:
 		body := []byte(apiCall.Body)
@@ -167,7 +167,7 @@ func ExecuteAPICall(ctx context.Context, apiCall *config_loader.APICall, execCtx
 		// Return response AND error - response may contain useful details even on error
 		// (e.g., HTTP status code, response body)
 		if resp != nil {
-			log.Warning(fmt.Sprintf("API call failed: %d %s, error: %v", resp.StatusCode, resp.Status, err))
+			log.Warnf(ctx, "API call failed: %d %s, error: %v", resp.StatusCode, resp.Status, err)
 			// Wrap as APIError with full context
 			apiErr := apierrors.NewAPIError(
 				apiCall.Method,
@@ -181,7 +181,7 @@ func ExecuteAPICall(ctx context.Context, apiCall *config_loader.APICall, execCtx
 			)
 			return resp, url, apiErr
 		} else {
-			log.Warning(fmt.Sprintf("API call failed: %v", err))
+			log.Warnf(ctx, "API call failed: %v", err)
 			// No response - create APIError with minimal context
 			apiErr := apierrors.NewAPIError(
 				apiCall.Method,
@@ -201,7 +201,7 @@ func ExecuteAPICall(ctx context.Context, apiCall *config_loader.APICall, execCtx
 		return nil, url, apierrors.NewAPIError(apiCall.Method, url, 0, "", nil, 0, 0, nilErr)
 	}
 
-	log.Infof("API call completed: %d %s", resp.StatusCode, resp.Status)
+	log.Infof(ctx, "API call completed: %d %s", resp.StatusCode, resp.Status)
 	return resp, url, nil
 }
 
@@ -261,9 +261,9 @@ var templateFuncs = template.FuncMap{
 	"title": func(s string) string {
 		return cases.Title(language.English).String(s)
 	},
-	"trim": strings.TrimSpace,
-	"replace":  strings.ReplaceAll,
-	"contains": strings.Contains,
+	"trim":      strings.TrimSpace,
+	"replace":   strings.ReplaceAll,
+	"contains":  strings.Contains,
 	"hasPrefix": strings.HasPrefix,
 	"hasSuffix": strings.HasSuffix,
 	// Default value function
@@ -378,7 +378,7 @@ func adapterMetadataToMap(adapter *AdapterMetadata) map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"executionStatus": adapter.ExecutionStatus,
+		"executionStatus":  adapter.ExecutionStatus,
 		"resourcesSkipped": adapter.ResourcesSkipped,
 		"skipReason":       adapter.SkipReason,
 		"errorReason":      adapter.ErrorReason,
@@ -386,4 +386,3 @@ func adapterMetadataToMap(adapter *AdapterMetadata) map[string]interface{} {
 		"executionError":   executionErrorToMap(adapter.ExecutionError),
 	}
 }
-

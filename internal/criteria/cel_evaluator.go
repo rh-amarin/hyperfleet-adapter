@@ -1,6 +1,7 @@
 package criteria
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -15,9 +16,10 @@ import (
 
 // CELEvaluator evaluates CEL expressions against a context
 type CELEvaluator struct {
-	env     *cel.Env
-	context *EvaluationContext
-	log     logger.Logger
+	env       *cel.Env
+	evalCtx   *EvaluationContext
+	log       logger.Logger
+	ctx     context.Context
 }
 
 // CELResult contains the result of evaluating a CEL expression.
@@ -51,14 +53,11 @@ func (r *CELResult) IsSuccess() bool {
 	return r.Error == nil
 }
 
-// NewCELEvaluator creates a new CEL evaluator with the given context
-func NewCELEvaluator(ctx *EvaluationContext, log logger.Logger) (*CELEvaluator, error) {
-	if ctx == nil {
-		ctx = NewEvaluationContext()
-	}
-
+// newCELEvaluator creates a new CEL evaluator with the given context
+// NOTE: Caller (NewEvaluator) is responsible for parameter validation
+func newCELEvaluator(ctx context.Context, evalCtx *EvaluationContext, log logger.Logger) (*CELEvaluator, error) {
 	// Build CEL environment with variables from context
-	options := buildCELOptions(ctx)
+	options := buildCELOptions(evalCtx)
 
 	env, err := cel.NewEnv(options...)
 	if err != nil {
@@ -67,8 +66,9 @@ func NewCELEvaluator(ctx *EvaluationContext, log logger.Logger) (*CELEvaluator, 
 
 	return &CELEvaluator{
 		env:     env,
-		context: ctx,
+		evalCtx: evalCtx,
 		log:     log,
+		ctx:     ctx,
 	}, nil
 }
 
@@ -161,13 +161,11 @@ func (e *CELEvaluator) EvaluateSafe(expression string) (*CELResult, error) {
 
 	// Evaluate the expression - errors here are SAFE (data might not exist yet)
 	// Get a snapshot of the data for thread-safe evaluation
-	out, _, err := prg.Eval(e.context.Data())
+	out, _, err := prg.Eval(e.evalCtx.Data())
 	if err != nil {
 		// Capture evaluation error in result - this is the "safe" part
 		// These errors are expected when data fields don't exist yet
-		if e.log != nil {
-			e.log.V(2).Infof("CEL evaluation failed for %q: %v", expression, err)
-		}
+		e.log.Debugf(e.ctx, "CEL evaluation failed for %q: %v", expression, err)
 		return &CELResult{
 			Value:       nil,
 			Matched:     false,

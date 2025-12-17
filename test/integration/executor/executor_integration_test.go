@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +18,7 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/test/integration/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
@@ -88,10 +88,11 @@ func TestExecutor_FullFlow_Success(t *testing.T) {
 
 	// Create config and executor
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient(
+	apiClient, err := hyperfleet_api.NewClient(testLog(),
 		hyperfleet_api.WithTimeout(10*time.Second),
 		hyperfleet_api.WithRetryAttempts(1),
 	)
+	require.NoError(t, err, "failed to create API client")
 
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
@@ -115,10 +116,6 @@ func TestExecutor_FullFlow_Success(t *testing.T) {
 	// Verify result
 	if result.Status != executor.StatusSuccess {
 		t.Errorf("Expected success status, got %s: %v", result.Status, result.Error)
-	}
-
-	if result.EventID != evt.ID() {
-		t.Errorf("Expected event ID %s, got %s", evt.ID(), result.EventID)
 	}
 
 	// Verify params were extracted
@@ -231,8 +228,8 @@ func TestExecutor_PreconditionNotMet(t *testing.T) {
 
 	// Create config and executor
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient()
-
+	apiClient, err := hyperfleet_api.NewClient(k8sEnv.Log)
+	assert.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -333,9 +330,10 @@ func TestExecutor_PreconditionAPIFailure(t *testing.T) {
 
 	// Create config and executor
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient(
+	apiClient, err := hyperfleet_api.NewClient(testLog(),
 		hyperfleet_api.WithRetryAttempts(1),
 	)
+	assert.NoError(t, err)
 
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
@@ -446,7 +444,9 @@ func TestExecutor_CELExpressionEvaluation(t *testing.T) {
 		},
 	}
 
-	apiClient, _ := hyperfleet_api.NewClient()
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+
+	assert.NoError(t, err)
 
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
@@ -494,8 +494,8 @@ func TestExecutor_MultipleMessages(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_VERSION", "v1")
 
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient()
-
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	assert.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -547,8 +547,8 @@ func TestExecutor_Handler_Integration(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_VERSION", "v1")
 
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient()
-
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	assert.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -598,8 +598,8 @@ func TestExecutor_Handler_PreconditionNotMet_ReturnsNil(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_VERSION", "v1")
 
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient()
-
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	assert.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -631,8 +631,8 @@ func TestExecutor_ContextCancellation(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_VERSION", "v1")
 
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient()
-
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	assert.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -665,7 +665,8 @@ func TestExecutor_MissingRequiredParam(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_VERSION", "v1")
 
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient()
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	assert.NoError(t, err)
 
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
@@ -729,7 +730,8 @@ func TestExecutor_InvalidEventJSON(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_VERSION", "v1")
 
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient()
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	assert.NoError(t, err)
 
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
@@ -781,8 +783,8 @@ func TestExecutor_MissingEventFields(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_VERSION", "v1")
 
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient()
-
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	assert.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -836,8 +838,8 @@ func TestExecutor_LogAction(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_BASE_URL", mockAPI.URL())
 	t.Setenv("HYPERFLEET_API_VERSION", "v1")
 
-	// Create a custom logger that captures log messages
-	logCapture := &logCaptureLogger{t: t, messages: make([]string, 0)}
+	// Create a logger that captures log messages for assertions
+	log, logCapture := logger.NewCaptureLogger()
 
 	// Create config with log actions in preconditions and post-actions
 	config := &config_loader.AdapterConfig{
@@ -912,11 +914,12 @@ func TestExecutor_LogAction(t *testing.T) {
 		},
 	}
 
-	apiClient, _ := hyperfleet_api.NewClient()
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	assert.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
-		WithLogger(logCapture).
+		WithLogger(log).
 		WithK8sClient(getK8sEnvForTest(t).Client).
 		Build()
 	if err != nil {
@@ -933,10 +936,8 @@ func TestExecutor_LogAction(t *testing.T) {
 	}
 
 	// Verify log messages were captured
-	t.Logf("Captured %d log messages", len(logCapture.messages))
-	for i, msg := range logCapture.messages {
-		t.Logf("  [%d] %s", i, msg)
-	}
+	capturedLogs := logCapture.Messages()
+	t.Logf("Captured logs:\n%s", capturedLogs)
 
 	// Check for expected log messages (with [config] prefix)
 	expectedLogs := []string{
@@ -947,14 +948,7 @@ func TestExecutor_LogAction(t *testing.T) {
 	}
 
 	for _, expected := range expectedLogs {
-		found := false
-		for _, msg := range logCapture.messages {
-			if strings.Contains(msg, expected) {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !logCapture.Contains(expected) {
 			t.Errorf("Expected log message not found: %s", expected)
 		}
 	}
@@ -972,38 +966,6 @@ func TestExecutor_LogAction(t *testing.T) {
 	t.Logf("Log action test completed successfully")
 }
 
-// logCaptureLogger captures log messages for testing
-type logCaptureLogger struct {
-	t        *testing.T
-	messages []string
-	mu       sync.Mutex
-}
-
-func (l *logCaptureLogger) V(level int32) logger.Logger { return l }
-func (l *logCaptureLogger) Extra(key string, value interface{}) logger.Logger { return l }
-
-func (l *logCaptureLogger) capture(level, format string, args ...interface{}) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	msg := fmt.Sprintf("[%s] "+format, append([]interface{}{level}, args...)...)
-	l.messages = append(l.messages, msg)
-	l.t.Logf("%s", msg)
-}
-
-func (l *logCaptureLogger) Infof(format string, args ...interface{}) {
-	l.capture("INFO", format, args...)
-}
-func (l *logCaptureLogger) Warningf(format string, args ...interface{}) {
-	l.capture("WARN", format, args...)
-}
-func (l *logCaptureLogger) Errorf(format string, args ...interface{}) {
-	l.capture("ERROR", format, args...)
-}
-func (l *logCaptureLogger) Info(message string)    { l.capture("INFO", "%s", message) }
-func (l *logCaptureLogger) Warning(message string) { l.capture("WARN", "%s", message) }
-func (l *logCaptureLogger) Error(message string)   { l.capture("ERROR", "%s", message) }
-func (l *logCaptureLogger) Fatal(message string)   { l.t.Fatalf("[FATAL] %s", message) }
-func (l *logCaptureLogger) Flush()                 {}
 
 // TestExecutor_PostActionAPIFailure tests handling of post action API failures (4xx/5xx responses)
 func TestExecutor_PostActionAPIFailure(t *testing.T) {
@@ -1020,10 +982,10 @@ func TestExecutor_PostActionAPIFailure(t *testing.T) {
 
 	// Create config and executor
 	config := createTestConfig(mockAPI.URL())
-	apiClient, _ := hyperfleet_api.NewClient(
+	apiClient, err := hyperfleet_api.NewClient(testLog(),
 		hyperfleet_api.WithRetryAttempts(1),
 	)
-
+	assert.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -1197,8 +1159,8 @@ func TestExecutor_ExecutionError_CELAccess(t *testing.T) {
 		},
 	}
 
-	apiClient, _ := hyperfleet_api.NewClient(hyperfleet_api.WithRetryAttempts(1))
-
+	apiClient, err := hyperfleet_api.NewClient(testLog(), hyperfleet_api.WithRetryAttempts(1))
+	assert.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -1335,15 +1297,15 @@ func TestExecutor_PayloadBuildFailure(t *testing.T) {
 		},
 	}
 
-	apiClient, _ := hyperfleet_api.NewClient()
-	
-	// Use log capture to verify error logging
-	logCapture := &logCaptureLogger{t: t, messages: make([]string, 0)}
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	assert.NoError(t, err)
+	// Use capture logger to verify error logging
+	log, logCapture := logger.NewCaptureLogger()
 
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
-		WithLogger(logCapture).
+		WithLogger(log).
 		WithK8sClient(getK8sEnvForTest(t).Client).
 		Build()
 	if err != nil {
@@ -1381,14 +1343,10 @@ func TestExecutor_PayloadBuildFailure(t *testing.T) {
 	}
 
 	// Verify error was logged (should contain "failed to build")
-	foundErrorLog := false
-	for _, msg := range logCapture.messages {
-		if strings.Contains(msg, "[ERROR]") && strings.Contains(msg, "failed to build") {
-			foundErrorLog = true
-			t.Logf("Found error log: %s", msg)
-			break
-		}
-	}
+	// slog uses "level=ERROR" format
+	capturedLogs := logCapture.Messages()
+	t.Logf("Captured logs:\n%s", capturedLogs)
+	foundErrorLog := logCapture.Contains("level=ERROR") && logCapture.Contains("failed to build")
 	assert.True(t, foundErrorLog, "Expected to find error log for payload build failure")
 
 	// Verify NO API call was made to the post action endpoint (blocked)

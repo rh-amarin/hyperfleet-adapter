@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/golang/glog"
 	"github.com/google/cel-go/cel"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/criteria"
@@ -63,8 +62,8 @@ type Validator struct {
 	celEnv        *cel.Env
 }
 
-// NewValidator creates a new Validator for the given config
-func NewValidator(config *AdapterConfig) *Validator {
+// newValidator creates a new Validator for the given config
+func newValidator(config *AdapterConfig) *Validator {
 	return &Validator{
 		config: config,
 		errors: &ValidationErrors{},
@@ -389,7 +388,9 @@ func (v *Validator) validateCELExpressions() {
 	}
 }
 
-// validateCELExpression validates a single CEL expression
+// validateCELExpression validates a single CEL expression (syntax only)
+// Type checking is skipped because variables are dynamic (DynType) and
+// their actual types are only known at runtime.
 func (v *Validator) validateCELExpression(expr string, path string) {
 	if expr == "" {
 		return
@@ -398,18 +399,10 @@ func (v *Validator) validateCELExpression(expr string, path string) {
 	// Clean up the expression (remove leading/trailing whitespace and newlines)
 	expr = strings.TrimSpace(expr)
 
-	// Try to parse the expression
-	ast, issues := v.celEnv.Parse(expr)
+	// Syntax validation only
+	_, issues := v.celEnv.Parse(expr)
 	if issues != nil && issues.Err() != nil {
 		v.errors.Add(path, fmt.Sprintf("CEL parse error: %v", issues.Err()))
-		return
-	}
-
-	// Try to check the expression (type checking)
-	// Note: This may fail for dynamic variables, which is acceptable
-	_, issues = v.celEnv.Check(ast)
-	if issues != nil && issues.Err() != nil {
-		glog.V(2).Infof("CEL type check failed for expression %q (validation continues): %v", expr, issues.Err())
 	}
 }
 
@@ -501,15 +494,4 @@ func (v *Validator) validateK8sManifest(manifest map[string]interface{}, path st
 			v.errors.Add(path+"."+FieldKind, "kind cannot be empty")
 		}
 	}
-}
-
-// -----------------------------------------------------------------------------
-// Public API (backward compatible)
-// -----------------------------------------------------------------------------
-
-// Validate performs semantic validation on the config including
-// operators, template variables, CEL expressions, and K8s manifests.
-// This is called automatically by Parse() after structural validation.
-func Validate(config *AdapterConfig) error {
-	return NewValidator(config).Validate()
 }

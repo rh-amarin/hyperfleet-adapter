@@ -315,10 +315,11 @@ func TestExecutor_K8s_CreateResources(t *testing.T) {
 
 	// Create config with K8s resources
 	config := createK8sTestConfig(mockAPI.URL(), testNamespace)
-	apiClient, _ := hyperfleet_api.NewClient(
+	apiClient, err := hyperfleet_api.NewClient(testLog(),
 		hyperfleet_api.WithTimeout(10*time.Second),
 		hyperfleet_api.WithRetryAttempts(1),
 	)
+	require.NoError(t, err)
 
 	// Create executor with real K8s client
 	exec, err := executor.NewBuilder().
@@ -467,7 +468,8 @@ func TestExecutor_K8s_UpdateExistingResource(t *testing.T) {
 	// Only include ConfigMap resource for this test
 	config.Spec.Resources = config.Spec.Resources[:1]
 
-	apiClient, _ := hyperfleet_api.NewClient()
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	require.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -573,7 +575,8 @@ func TestExecutor_K8s_DiscoveryByLabels(t *testing.T) {
 		},
 	}
 
-	apiClient, _ := hyperfleet_api.NewClient()
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	require.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -643,7 +646,8 @@ func TestExecutor_K8s_RecreateOnChange(t *testing.T) {
 		},
 	}
 
-	apiClient, _ := hyperfleet_api.NewClient()
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	require.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -700,8 +704,8 @@ func TestExecutor_K8s_MultipleResourceTypes(t *testing.T) {
 
 	// Execute with default config (ConfigMap + Secret)
 	config := createK8sTestConfig(mockAPI.URL(), testNamespace)
-	apiClient, _ := hyperfleet_api.NewClient()
-
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	require.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -748,8 +752,8 @@ func TestExecutor_K8s_ResourceCreationFailure(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_VERSION", "v1")
 
 	config := createK8sTestConfig(mockAPI.URL(), nonExistentNamespace)
-	apiClient, _ := hyperfleet_api.NewClient()
-
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	require.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -903,7 +907,8 @@ func TestExecutor_K8s_MultipleMatchingResources(t *testing.T) {
 		},
 	}
 
-	apiClient, _ := hyperfleet_api.NewClient()
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	require.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).
@@ -966,8 +971,8 @@ func TestExecutor_K8s_PostActionsAfterPreconditionNotMet(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_VERSION", "v1")
 
 	config := createK8sTestConfig(mockAPI.URL(), testNamespace)
-	apiClient, _ := hyperfleet_api.NewClient()
-
+	apiClient, err := hyperfleet_api.NewClient(testLog())
+	require.NoError(t, err)
 	exec, err := executor.NewBuilder().
 		WithAdapterConfig(config).
 		WithAPIClient(apiClient).

@@ -2,7 +2,6 @@ package executor
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/cloudevents/sdk-go/v2/event"
@@ -20,23 +19,7 @@ func newMockAPIClient() *hyperfleet_api.MockClient {
 	return hyperfleet_api.NewMockClient()
 }
 
-// mockLogger implements logger.Logger for testing
-// It can optionally capture warnings for assertions
-type mockLogger struct {
-	warnings []string
-}
-
-func (m *mockLogger) V(level int32) logger.Logger                       { return m }
-func (m *mockLogger) Infof(format string, args ...interface{})          {}
-func (m *mockLogger) Warningf(format string, args ...interface{})       {}
-func (m *mockLogger) Errorf(format string, args ...interface{})         {}
-func (m *mockLogger) Extra(key string, value interface{}) logger.Logger { return m }
-func (m *mockLogger) Info(message string)                               {}
-func (m *mockLogger) Warning(message string)                            { m.warnings = append(m.warnings, message) }
-func (m *mockLogger) Error(message string)                              {}
-func (m *mockLogger) Fatal(message string)                              {}
-func (m *mockLogger) Flush()                                            {}
-
+// TestNewExecutor tests the NewExecutor function
 func TestNewExecutor(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -52,7 +35,7 @@ func TestNewExecutor(t *testing.T) {
 			name: "missing adapter config",
 			config: &ExecutorConfig{
 				APIClient: newMockAPIClient(),
-				Logger:    &mockLogger{},
+				Logger:    logger.NewTestLogger(),
 			},
 			expectError: true,
 		},
@@ -60,7 +43,7 @@ func TestNewExecutor(t *testing.T) {
 			name: "missing API client",
 			config: &ExecutorConfig{
 				AdapterConfig: &config_loader.AdapterConfig{},
-				Logger:        &mockLogger{},
+				Logger:        logger.NewTestLogger(),
 			},
 			expectError: true,
 		},
@@ -77,7 +60,8 @@ func TestNewExecutor(t *testing.T) {
 			config: &ExecutorConfig{
 				AdapterConfig: &config_loader.AdapterConfig{},
 				APIClient:     newMockAPIClient(),
-				Logger:        &mockLogger{},
+				K8sClient:     k8s_client.NewMockK8sClient(),
+				Logger:        logger.NewTestLogger(),
 			},
 			expectError: false,
 		},
@@ -107,7 +91,7 @@ func TestExecutorBuilder(t *testing.T) {
 		WithAdapterConfig(config).
 		WithAPIClient(newMockAPIClient()).
 		WithK8sClient(k8s_client.NewMockK8sClient()).
-		WithLogger(&mockLogger{}).
+		WithLogger(logger.NewTestLogger()).
 		Build()
 
 	require.NoError(t, err)
@@ -116,12 +100,13 @@ func TestExecutorBuilder(t *testing.T) {
 
 func TestExecutionContext(t *testing.T) {
 	ctx := context.Background()
-	evt := event.New()
-	evt.SetID("test-123")
+	eventData := map[string]interface{}{
+		"cluster_id": "test-cluster",
+	}
 
-	execCtx := NewExecutionContext(ctx, &evt, make(map[string]interface{}))
+	execCtx := NewExecutionContext(ctx, eventData)
 
-	assert.Equal(t, "test-123", execCtx.Event.ID())
+	assert.Equal(t, "test-cluster", execCtx.EventData["cluster_id"])
 	assert.Empty(t, execCtx.Params)
 	assert.Empty(t, execCtx.Resources)
 	assert.Equal(t, string(StatusSuccess), execCtx.Adapter.ExecutionStatus)
@@ -129,9 +114,7 @@ func TestExecutionContext(t *testing.T) {
 
 func TestExecutionContext_SetError(t *testing.T) {
 	ctx := context.Background()
-	evt := event.New()
-
-	execCtx := NewExecutionContext(ctx, &evt, make(map[string]interface{}))
+	execCtx := NewExecutionContext(ctx, map[string]interface{}{})
 	execCtx.SetError("TestReason", "Test message")
 
 	assert.Equal(t, string(StatusFailed), execCtx.Adapter.ExecutionStatus)
@@ -141,10 +124,7 @@ func TestExecutionContext_SetError(t *testing.T) {
 
 func TestExecutionContext_EvaluationTracking(t *testing.T) {
 	ctx := context.Background()
-	evt := event.New()
-	evt.SetID("test-123")
-
-	execCtx := NewExecutionContext(ctx, &evt, make(map[string]interface{}))
+	execCtx := NewExecutionContext(ctx, map[string]interface{}{})
 
 	// Verify evaluations are empty initially
 	assert.Empty(t, execCtx.Evaluations, "expected empty evaluations initially")
@@ -196,9 +176,7 @@ func TestExecutionContext_EvaluationTracking(t *testing.T) {
 
 func TestExecutionContext_GetEvaluationsByPhase(t *testing.T) {
 	ctx := context.Background()
-	evt := event.New()
-
-	execCtx := NewExecutionContext(ctx, &evt, make(map[string]interface{}))
+	execCtx := NewExecutionContext(ctx, map[string]interface{}{})
 
 	// Add evaluations in different phases
 	execCtx.AddCELEvaluation(PhasePreconditions, "precond-1", "true", true)
@@ -220,9 +198,7 @@ func TestExecutionContext_GetEvaluationsByPhase(t *testing.T) {
 
 func TestExecutionContext_GetFailedEvaluations(t *testing.T) {
 	ctx := context.Background()
-	evt := event.New()
-
-	execCtx := NewExecutionContext(ctx, &evt, make(map[string]interface{}))
+	execCtx := NewExecutionContext(ctx, map[string]interface{}{})
 
 	// Add mixed evaluations
 	execCtx.AddCELEvaluation(PhasePreconditions, "passed-1", "true", true)
@@ -284,29 +260,23 @@ func TestExecute_ParamExtraction(t *testing.T) {
 		WithAdapterConfig(config).
 		WithAPIClient(newMockAPIClient()).
 		WithK8sClient(k8s_client.NewMockK8sClient()).
-		WithLogger(&mockLogger{}).
+		WithLogger(logger.NewTestLogger()).
 		Build()
 
 	if err != nil {
 		t.Fatalf("unexpected error creating executor: %v", err)
 	}
 
-	// Create event with data
-	evt := event.New()
-	evt.SetID("test-event-123")
+	// Create event data
 	eventData := map[string]interface{}{
 		"cluster_id": "cluster-456",
 	}
-	eventDataBytes, _ := json.Marshal(eventData)
-	_ = evt.SetData(event.ApplicationJSON, eventDataBytes)
 
-	// Execute
-	result := exec.Execute(context.Background(), &evt)
+	// Execute with event ID in context
+	ctx := logger.WithEventID(context.Background(), "test-event-123")
+	result := exec.Execute(ctx, eventData)
 
 	// Check result
-	if result.EventID != "test-event-123" {
-		t.Errorf("expected event ID 'test-event-123', got '%s'", result.EventID)
-	}
 
 	// Check extracted params
 	if result.Params["testParam"] != "test-value" {
@@ -328,8 +298,7 @@ func TestParamExtractor(t *testing.T) {
 			"value": "nested-value",
 		},
 	}
-	eventDataBytes, _ := json.Marshal(eventData)
-	_ = evt.SetData(event.ApplicationJSON, eventDataBytes)
+	_ = evt.SetData(event.ApplicationJSON, eventData)
 
 	tests := []struct {
 		name        string
@@ -382,7 +351,7 @@ func TestParamExtractor(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create fresh context for each test
-			execCtx := NewExecutionContext(context.Background(), &evt, eventData)
+			execCtx := NewExecutionContext(context.Background(), eventData)
 			
 			// Create config with test params
 			config := &config_loader.AdapterConfig{
@@ -544,17 +513,15 @@ func TestSequentialExecution_Preconditions(t *testing.T) {
 				WithAdapterConfig(config).
 				WithAPIClient(newMockAPIClient()).
 				WithK8sClient(k8s_client.NewMockK8sClient()).
-				WithLogger(&mockLogger{}).
+				WithLogger(logger.NewTestLogger()).
 				Build()
 
 			if err != nil {
 				t.Fatalf("unexpected error creating executor: %v", err)
 			}
 
-			evt := event.New()
-			evt.SetID("test-event-seq")
-			
-			result := exec.Execute(context.Background(), &evt)
+			ctx := logger.WithEventID(context.Background(), "test-event-seq")
+			result := exec.Execute(ctx, map[string]interface{}{})
 
 			// Verify number of precondition results
 			if len(result.PreconditionResults) != tt.expectedResults {
@@ -651,17 +618,15 @@ func TestSequentialExecution_Resources(t *testing.T) {
 				WithAdapterConfig(config).
 				WithAPIClient(newMockAPIClient()).
 				WithK8sClient(k8s_client.NewMockK8sClient()).
-				WithLogger(&mockLogger{}).
+				WithLogger(logger.NewTestLogger()).
 				Build()
 
 			if err != nil {
 				t.Fatalf("unexpected error creating executor: %v", err)
 			}
 
-			evt := event.New()
-			evt.SetID("test-event-resources")
-			
-			result := exec.Execute(context.Background(), &evt)
+			ctx := logger.WithEventID(context.Background(), "test-event-resources")
+			result := exec.Execute(ctx, map[string]interface{}{})
 
 			// Verify sequential stop-on-failure: number of results should match expected
 			if len(result.ResourceResults) != tt.expectedResults {
@@ -727,17 +692,15 @@ func TestSequentialExecution_PostActions(t *testing.T) {
 				WithAdapterConfig(config).
 				WithAPIClient(mockClient).
 				WithK8sClient(k8s_client.NewMockK8sClient()).
-				WithLogger(&mockLogger{}).
+				WithLogger(logger.NewTestLogger()).
 				Build()
 
 			if err != nil {
 				t.Fatalf("unexpected error creating executor: %v", err)
 			}
 
-			evt := event.New()
-			evt.SetID("test-event-post")
-			
-			result := exec.Execute(context.Background(), &evt)
+			ctx := logger.WithEventID(context.Background(), "test-event-post")
+			result := exec.Execute(ctx, map[string]interface{}{})
 
 			// Verify number of post action results
 			if len(result.PostActionResults) != tt.expectedResults {
@@ -799,17 +762,15 @@ func TestSequentialExecution_SkipReasonCapture(t *testing.T) {
 				WithAdapterConfig(config).
 				WithAPIClient(newMockAPIClient()).
 				WithK8sClient(k8s_client.NewMockK8sClient()).
-				WithLogger(&mockLogger{}).
+				WithLogger(logger.NewTestLogger()).
 				Build()
 
 			if err != nil {
 				t.Fatalf("unexpected error creating executor: %v", err)
 			}
 
-			evt := event.New()
-			evt.SetID("test-event-skip")
-			
-			result := exec.Execute(context.Background(), &evt)
+			ctx := logger.WithEventID(context.Background(), "test-event-skip")
+			result := exec.Execute(ctx, map[string]interface{}{})
 
 			// Verify execution status is success (adapter executed successfully)
 			if result.Status != tt.expectedStatus {

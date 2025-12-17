@@ -3,6 +3,7 @@
 package config_loader_integration
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/config_loader"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/criteria"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 )
 
 // TestMain sets up environment variables required by the adapter config template
@@ -68,7 +70,8 @@ func TestConfigLoadAndCriteriaEvaluation(t *testing.T) {
 		},
 	})
 
-	evaluator := criteria.NewEvaluator(ctx, nil)
+	evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
 
 	t.Run("evaluate precondition conditions from config", func(t *testing.T) {
 		// Find the clusterStatus precondition
@@ -153,8 +156,8 @@ func TestConfigConditionsToCEL(t *testing.T) {
 		ctx := criteria.NewEvaluationContext()
 		ctx.Set("clusterPhase", "NotReady") // Must match template condition
 
-		evaluator := criteria.NewEvaluator(ctx, nil)
-
+		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+		require.NoError(t, err)
 		conditions := make([]criteria.ConditionDef, len(precond.Conditions))
 		for i, cond := range precond.Conditions {
 			conditions[i] = criteria.ConditionDef{
@@ -184,8 +187,8 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 		ctx := criteria.NewEvaluationContext()
 		ctx.Set("clusterPhase", "Terminating") // Not matching "NotReady"
 
-		evaluator := criteria.NewEvaluator(ctx, nil)
-
+		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+		require.NoError(t, err)
 		conditions := make([]criteria.ConditionDef, len(precond.Conditions))
 		for i, cond := range precond.Conditions {
 			conditions[i] = criteria.ConditionDef{
@@ -205,8 +208,8 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 		ctx := criteria.NewEvaluationContext()
 		ctx.Set("clusterPhase", "Ready") // Not matching "NotReady"
 
-		evaluator := criteria.NewEvaluator(ctx, nil)
-
+		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+		require.NoError(t, err)
 		conditions := make([]criteria.ConditionDef, len(precond.Conditions))
 		for i, cond := range precond.Conditions {
 			conditions[i] = criteria.ConditionDef{
@@ -225,8 +228,8 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 		ctx := criteria.NewEvaluationContext()
 		// vpcId not set - should fail exists check
 
-		evaluator := criteria.NewEvaluator(ctx, nil)
-
+		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+		require.NoError(t, err)
 		// Just check the vpcId exists condition (this is a general test, not tied to template)
 		result := evaluator.EvaluateConditionSafe("vpcId", criteria.OperatorExists, true)
 		assert.False(t, result, "exists check should fail when field is missing")
@@ -312,8 +315,8 @@ func TestConfigPostProcessingEvaluation(t *testing.T) {
 			},
 		})
 
-		evaluator := criteria.NewEvaluator(ctx, nil)
-
+		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+		require.NoError(t, err)
 		// Test accessing nested K8s resource data
 		t.Run("access namespace status", func(t *testing.T) {
 			value, err := evaluator.GetField("resources.clusterNamespace.status.phase")
@@ -374,8 +377,8 @@ func TestConfigNullSafetyWithMissingResources(t *testing.T) {
 			"clusterController": nil, // Not created yet
 		})
 
-		evaluator := criteria.NewEvaluator(ctx, nil)
-
+		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+		require.NoError(t, err)
 		// Safe access to missing resource
 		value := evaluator.GetFieldSafe("resources.clusterController.status.readyReplicas")
 		assert.Nil(t, value, "should return nil for null resource")
@@ -404,7 +407,8 @@ func TestConfigNullSafetyWithMissingResources(t *testing.T) {
 			},
 		})
 
-		evaluator := criteria.NewEvaluator(ctx, nil)
+		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+		require.NoError(t, err)
 
 		// Should handle null status gracefully
 		value := evaluator.GetFieldOrDefault("resources.clusterController.status.readyReplicas", -1)

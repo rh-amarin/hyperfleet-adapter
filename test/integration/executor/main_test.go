@@ -2,8 +2,10 @@ package executor_integration_test
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -101,7 +103,7 @@ func TestMain(m *testing.M) {
 // setupSharedK8sEnvtestEnv creates the shared envtest environment for executor tests
 func setupSharedK8sEnvtestEnv() (*K8sTestEnv, error) {
 	ctx := context.Background()
-	log := logger.NewLogger(ctx)
+	log := logger.NewTestLogger()
 
 	imageName := os.Getenv("INTEGRATION_ENVTEST_IMAGE")
 
@@ -137,11 +139,12 @@ func setupSharedK8sEnvtestEnv() (*K8sTestEnv, error) {
 	}
 
 	// Wait for API server to be ready
-	println("   Waiting for API server to be ready...")
+	println("   Waiting for API server to be fully ready...")
 	if err := waitForAPIServerReady(restConfig, 30*time.Second); err != nil {
 		sharedContainer.Cleanup()
 		return nil, fmt.Errorf("API server failed to become ready: %w", err)
 	}
+	println("   ✅ API server is ready!")
 
 	// Create K8s client
 	client, err := k8s_client.NewClientFromConfig(ctx, restConfig, log)
@@ -179,19 +182,33 @@ func setupSharedK8sEnvtestEnv() (*K8sTestEnv, error) {
 }
 
 // waitForAPIServerReady waits for the API server to be ready to accept connections
+// Uses a simple HTTP health check which is more reliable during startup
 func waitForAPIServerReady(config *rest.Config, timeout time.Duration) error {
+	// Create HTTP client with TLS verification disabled (for self-signed certs)
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // Required for envtest self-signed certs
+				MinVersion:         tls.VersionTLS12,
+			},
+		},
+	}
+
+	healthURL := config.Host + "/healthz"
 	deadline := time.Now().Add(timeout)
-	ctx := context.Background()
-	log := logger.NewLogger(ctx)
 
 	for time.Now().Before(deadline) {
-		// Try to create a client
-		client, err := k8s_client.NewClientFromConfig(ctx, config, log)
+		req, err := http.NewRequest(http.MethodGet, healthURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+
+		resp, err := client.Do(req)
 		if err == nil {
-			// Try to list namespaces to verify API server is responsive
-			gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Namespace"}
-			_, err = client.ListResources(ctx, gvk, "", "")
-			if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
 				return nil // API server is ready
 			}
 		}
