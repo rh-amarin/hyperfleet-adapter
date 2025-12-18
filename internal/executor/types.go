@@ -28,12 +28,6 @@ const (
 	PhasePostActions ExecutionPhase = "post_actions"
 )
 
-// Kubernetes annotation keys
-const (
-	// AnnotationGeneration is the annotation key for tracking resource generation
-	AnnotationGeneration = "hyperfleet.io/generation"
-)
-
 // ExecutionStatus represents the status of execution (runtime perspective)
 type ExecutionStatus string
 

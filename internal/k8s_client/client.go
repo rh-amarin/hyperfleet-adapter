@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sort"
+	"strconv"
 
 	apperrors "github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/errors"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
@@ -19,6 +21,9 @@ import (
 
 // EnvKubeConfig is the environment variable for kubeconfig path
 const EnvKubeConfig = "KUBECONFIG"
+
+// AnnotationGeneration is the annotation key for tracking resource generation
+const AnnotationGeneration = "hyperfleet.io/generation"
 
 // Client is the Kubernetes client for managing resources using controller-runtime
 type Client struct {
@@ -365,4 +370,51 @@ func (c *Client) PatchResource(ctx context.Context, gvk schema.GroupVersionKind,
 	
 	// Get the updated resource to return
 	return c.GetResource(ctx, gvk, namespace, name)
+}
+
+// GetGenerationAnnotation extracts the generation annotation value from a resource.
+// Returns 0 if the resource is nil, has no annotations, or the annotation cannot be parsed.
+// Used for resource management to determine if a resource has changed.
+// In MVP we won't do validation for the mandatory annotations. Here return 0 if there is no generation annotation.
+func GetGenerationAnnotation(obj *unstructured.Unstructured) int64 {
+	if obj == nil {
+		return 0
+	}
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		return 0
+	}
+	genStr, ok := annotations[AnnotationGeneration]
+	if !ok || genStr == "" {
+		return 0
+	}
+	gen, err := strconv.ParseInt(genStr, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return gen
+}
+
+// GetLatestGenerationResource returns the resource with the highest generation annotation from a list.
+// It sorts by generation annotation (descending) and uses metadata.name as a secondary sort key
+// for deterministic behavior when generations are equal.
+// Returns nil if the list is nil or empty.
+func GetLatestGenerationResource(list *unstructured.UnstructuredList) *unstructured.Unstructured {
+	if list == nil || len(list.Items) == 0 {
+		return nil
+	}
+
+	// Sort by generation annotation (descending) to return the one with the latest generation
+	// Secondary sort by metadata.name for consistency when generations are equal
+	sort.Slice(list.Items, func(i, j int) bool {
+		genI := GetGenerationAnnotation(&list.Items[i])
+		genJ := GetGenerationAnnotation(&list.Items[j])
+		if genI != genJ {
+			return genI > genJ // Descending order - latest generation first
+		}
+		// Fall back to metadata.name for deterministic ordering when generations are equal
+		return list.Items[i].GetName() < list.Items[j].GetName()
+	})
+
+	return &list.Items[0]
 }

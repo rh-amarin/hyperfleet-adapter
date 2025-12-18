@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -277,8 +278,8 @@ func (v *SchemaValidator) validateAPICall(apiCall *APICall, path string) error {
 		return fmt.Errorf("%s.%s is required", path, FieldMethod)
 	}
 
-	if _, valid := ValidHTTPMethods[apiCall.Method]; !valid {
-		return fmt.Errorf("%s.%s %q is invalid (allowed: %s)", path, FieldMethod, apiCall.Method, strings.Join(ValidHTTPMethodsList, ", "))
+	if !slices.Contains(ValidHTTPMethods, apiCall.Method) {
+		return fmt.Errorf("%s.%s %q is invalid (allowed: %s)", path, FieldMethod, apiCall.Method, strings.Join(ValidHTTPMethods, ", "))
 	}
 
 	if apiCall.URL == "" {

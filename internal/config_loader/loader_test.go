@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -650,7 +651,7 @@ func TestGetBaseURL(t *testing.T) {
 
 	// Test: explicitly verify no env var fallback
 	// Set env var and verify GetBaseURL still returns empty (not the env value)
-	t.Setenv(EnvHyperfleetAPIBaseURL, "https://env-api.example.com")
+	t.Setenv(hyperfleet_api.EnvBaseURL, "https://env-api.example.com")
 	config = &HyperfleetAPIConfig{} // No BaseURL configured
 	assert.Equal(t, "", config.GetBaseURL(), "GetBaseURL should NOT read from env var; env fallback is handled by hyperfleet_api.NewClient")
 }

@@ -63,6 +63,10 @@ else
     CONTAINER_CMD := sh -c 'echo "No container runtime found. Please install Docker or Podman." && exit 1'
 endif
 
+# Install directory (defaults to $GOPATH/bin or $HOME/go/bin)
+GOPATH ?= $(shell $(GOCMD) env GOPATH)
+BINDIR ?= $(GOPATH)/bin
+
 # Directories
 # Find all Go packages, excluding vendor and test directories
 PKG_DIRS := $(shell $(GOCMD) list ./... 2>/dev/null | grep -v /vendor/ | grep -v /test/)
@@ -147,6 +151,16 @@ binary: ## Build binary
 	@echo "Version: $(VERSION), Commit: $(GIT_COMMIT), BuildDate: $(BUILD_DATE)"
 	@mkdir -p bin
 	CGO_ENABLED=0 $(GOBUILD) -ldflags="$(LDFLAGS)" -o bin/$(PROJECT_NAME) ./cmd/adapter
+
+.PHONY: build
+build: binary ## Alias for 'binary'
+
+.PHONY: install
+install: binary ## Install binary to BINDIR (default: $GOPATH/bin)
+	@echo "Installing $(PROJECT_NAME) to $(BINDIR)..."
+	@mkdir -p $(BINDIR)
+	cp bin/$(PROJECT_NAME) $(BINDIR)/$(PROJECT_NAME)
+	@echo "✅ Installed: $(BINDIR)/$(PROJECT_NAME)"
 
 .PHONY: clean
 clean: ## Clean build artifacts and test coverage files

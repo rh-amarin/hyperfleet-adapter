@@ -27,16 +27,7 @@ var SupportedAPIVersions = []string{
 }
 
 // ValidHTTPMethods defines allowed HTTP methods for API calls
-var ValidHTTPMethods = map[string]struct{}{
-	"GET":    {},
-	"POST":   {},
-	"PUT":    {},
-	"PATCH":  {},
-	"DELETE": {},
-}
-
-// ValidHTTPMethodsList is a pre-built list of valid HTTP methods for error messages
-var ValidHTTPMethodsList = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
+var ValidHTTPMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
 
 // -----------------------------------------------------------------------------
 // Loader Options (Functional Options Pattern)

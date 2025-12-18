@@ -3,8 +3,6 @@ package executor
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strconv"
 	"time"
 
 	"github.com/mitchellh/copystructure"
@@ -103,15 +101,27 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 
 	// Step 3: Perform the appropriate operation
 	if existingResource != nil {
-		// Resource exists - update or recreate
-		if resource.RecreateOnChange {
-			result.Operation = OperationRecreate
-			log.Infof("    Operation: RECREATE (recreateOnChange=true)")
-			result.Resource, err = re.recreateResource(ctx, existingResource, manifest, log)
+		// Check if generation annotations match - skip update if unchanged
+		existingGen := k8s_client.GetGenerationAnnotation(existingResource)
+		manifestGen := k8s_client.GetGenerationAnnotation(manifest)
+
+		if existingGen == manifestGen {
+			// Generations match - no action needed
+			result.Operation = OperationSkip
+			result.Resource = existingResource
+			log.Infof("    Operation: SKIP (generation %d unchanged)", existingGen)
 		} else {
-			result.Operation = OperationUpdate
-			log.Infof("    Operation: UPDATE")
-			result.Resource, err = re.updateResource(ctx, existingResource, manifest)
+			// Generations do not match - perform the appropriate action
+			// resource management is further feature. Current update and recreate is a placeholder for temporary use.
+			if resource.RecreateOnChange {
+				result.Operation = OperationRecreate
+				log.Infof("    Operation: RECREATE (recreateOnChange=true)")
+				result.Resource, err = re.recreateResource(ctx, existingResource, manifest, log)
+			} else {
+				result.Operation = OperationUpdate
+				log.Infof("    Operation: UPDATE")
+				result.Resource, err = re.updateResource(ctx, existingResource, manifest)
+			}
 		}
 	} else {
 		// Create new resource
@@ -178,18 +188,33 @@ func (re *ResourceExecutor) buildManifest(resource config_loader.Resource, execC
 	// Convert to unstructured
 	obj := &unstructured.Unstructured{Object: renderedData}
 
-	// Validate required fields
-	if obj.GetAPIVersion() == "" {
-		return nil, fmt.Errorf("manifest missing apiVersion")
-	}
-	if obj.GetKind() == "" {
-		return nil, fmt.Errorf("manifest missing kind")
-	}
-	if obj.GetName() == "" {
-		return nil, fmt.Errorf("manifest missing metadata.name")
+	// Validate manifest
+	if err := validateManifest(obj); err != nil {
+		return nil, err
 	}
 
 	return obj, nil
+}
+
+// validateManifest validates a Kubernetes manifest has all required fields and annotations
+func validateManifest(obj *unstructured.Unstructured) error {
+	// Validate required Kubernetes fields
+	if obj.GetAPIVersion() == "" {
+		return fmt.Errorf("manifest missing apiVersion")
+	}
+	if obj.GetKind() == "" {
+		return fmt.Errorf("manifest missing kind")
+	}
+	if obj.GetName() == "" {
+		return fmt.Errorf("manifest missing metadata.name")
+	}
+
+	// Validate required generation annotation
+	if k8s_client.GetGenerationAnnotation(obj) == 0 {
+		return fmt.Errorf("manifest missing required annotation %q", k8s_client.AnnotationGeneration)
+	}
+
+	return nil
 }
 
 // discoverExistingResource discovers an existing resource using the discovery config
@@ -246,20 +271,7 @@ func (re *ResourceExecutor) discoverExistingResource(ctx context.Context, gvk sc
 			return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvk.Group, Resource: gvk.Kind}, "")
 		}
 
-		// Sort by generation annotation (descending) to return the one with the latest generation
-		// This ensures deterministic behavior when multiple resources match the label selector
-		// Secondary sort by metadata.name for consistency when generations are equal
-		sort.Slice(list.Items, func(i, j int) bool {
-			genI := getGenerationAnnotationValue(&list.Items[i])
-			genJ := getGenerationAnnotationValue(&list.Items[j])
-			if genI != genJ {
-				return genI > genJ // Descending order - latest generation first
-			}
-			// Fall back to metadata.name for deterministic ordering when generations are equal
-			return list.Items[i].GetName() < list.Items[j].GetName()
-		})
-
-		return &list.Items[0], nil
+		return k8s_client.GetLatestGenerationResource(list), nil
 	}
 
 	return nil, fmt.Errorf("discovery config must specify byName or bySelectors")
@@ -464,29 +476,6 @@ func renderValue(v interface{}, params map[string]interface{}) (interface{}, err
 	default:
 		return v, nil
 	}
-}
-
-// getGenerationAnnotationValue extracts the generation annotation value from a resource
-// Returns 0 if the resource is nil, has no annotations, or the annotation cannot be parsed
-func getGenerationAnnotationValue(obj *unstructured.Unstructured) int64 {
-	if obj == nil {
-		return 0
-	}
-	annotations := obj.GetAnnotations()
-	if annotations == nil {
-		return 0
-	}
-	genStr, ok := annotations[AnnotationGeneration]
-	if !ok || genStr == "" {
-		return 0
-	}
-	// Try to parse as integer directly
-	gen, err := strconv.ParseInt(genStr, 10, 64)
-	if err != nil {
-		// Generation value is not a valid integer, return 0
-		return 0
-	}
-	return gen
 }
 
 // GetResourceAsMap converts an unstructured resource to a map for CEL evaluation

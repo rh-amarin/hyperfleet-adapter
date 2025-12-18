@@ -5,9 +5,6 @@ import (
 	"time"
 )
 
-// Environment variable for HyperfleetAPI base URL fallback
-const EnvHyperfleetAPIBaseURL = "HYPERFLEET_API_BASE_URL"
-
 // -----------------------------------------------------------------------------
 // Built-in Variables
 // -----------------------------------------------------------------------------
