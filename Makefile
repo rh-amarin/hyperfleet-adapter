@@ -31,7 +31,6 @@ GOBUILD := $(GOCMD) build
 GOTEST := $(GOCMD) test
 GOMOD := $(GOCMD) mod
 GOFMT := gofmt
-GOIMPORTS := goimports
 
 # Test parameters
 TEST_TIMEOUT := 30m
@@ -62,6 +61,9 @@ else
     CONTAINER_RUNTIME := none
     CONTAINER_CMD := sh -c 'echo "No container runtime found. Please install Docker or Podman." && exit 1'
 endif
+
+# Include bingo-managed tool versions
+include .bingo/Variables.mk
 
 # Install directory (defaults to $GOPATH/bin or $HOME/go/bin)
 GOPATH ?= $(shell $(GOCMD) env GOPATH)
@@ -120,24 +122,14 @@ test-all: test test-integration lint ## ✅ Run ALL tests (unit + integration + 
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 .PHONY: lint
-lint: ## Run golangci-lint
+lint: $(GOLANGCI_LINT) ## Run golangci-lint
 	@echo "Running golangci-lint..."
-	@if command -v golangci-lint > /dev/null; then \
-		golangci-lint cache clean && golangci-lint run; \
-	else \
-		echo "Error: golangci-lint not found. Please install it:"; \
-		echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
-		exit 1; \
-	fi
+	$(GOLANGCI_LINT) cache clean && $(GOLANGCI_LINT) run
 
 .PHONY: fmt
-fmt: ## Format code with gofmt and goimports
+fmt: $(GOIMPORTS) ## Format code with gofmt and goimports
 	@echo "Formatting code..."
-	@if command -v $(GOIMPORTS) > /dev/null; then \
-		$(GOIMPORTS) -w .; \
-	else \
-		$(GOFMT) -w .; \
-	fi
+	$(GOIMPORTS) -w .
 
 .PHONY: mod-tidy
 mod-tidy: ## Tidy Go module dependencies
