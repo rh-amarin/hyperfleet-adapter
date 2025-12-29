@@ -85,6 +85,7 @@ func (v *Validator) Validate() error {
 
 	// Run all validators
 	v.validateConditionOperators()
+	v.validateCaptureFields()
 	v.validateTemplateVariables()
 	v.validateCELExpressions()
 	v.validateK8sManifests()
@@ -170,6 +171,43 @@ func isSliceOrArray(value interface{}) bool {
 	}
 	kind := reflect.TypeOf(value).Kind()
 	return kind == reflect.Slice || kind == reflect.Array
+}
+
+// -----------------------------------------------------------------------------
+// Capture Field Validation
+// -----------------------------------------------------------------------------
+
+// validateCaptureFields validates capture fields in preconditions
+func (v *Validator) validateCaptureFields() {
+	for i, precond := range v.config.Spec.Preconditions {
+		for j, capture := range precond.Capture {
+			path := fmt.Sprintf("%s.%s[%d].%s[%d]", FieldSpec, FieldPreconditions, i, FieldCapture, j)
+			v.validateCaptureField(capture, path)
+		}
+	}
+}
+
+// validateCaptureField validates a single capture field configuration
+func (v *Validator) validateCaptureField(capture CaptureField, path string) {
+	// Name is required
+	if capture.Name == "" {
+		v.errors.Add(path, "capture name is required")
+	}
+
+	hasField := capture.Field != ""
+	hasExpression := capture.Expression != ""
+
+	// Must have exactly one of field or expression
+	if !hasField && !hasExpression {
+		v.errors.Add(path, "capture must have either 'field' or 'expression' set")
+	} else if hasField && hasExpression {
+		v.errors.Add(path, "capture cannot have both 'field' and 'expression' set; use only one")
+	}
+
+	// If expression is set, validate it as CEL
+	if hasExpression && v.celEnv != nil {
+		v.validateCELExpression(capture.Expression, path+"."+FieldExpression)
+	}
 }
 
 // -----------------------------------------------------------------------------

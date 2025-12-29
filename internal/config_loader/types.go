@@ -1,6 +1,59 @@
 package config_loader
 
-import "fmt"
+import (
+	"fmt"
+
+	"gopkg.in/yaml.v3"
+)
+
+// ValueDef represents a dynamic value definition in payload builds.
+// Used when a payload field should be computed via field extraction (JSONPath) or CEL expression.
+// Only one of Field or Expression should be set.
+//
+// Example YAML with field (JSONPath):
+//
+//	status:
+//	  field: "response.status"
+//	  default: "unknown"
+//
+// Example YAML with expression (CEL):
+//
+//	status:
+//	  expression: "adapter.?errorMessage.orValue(\"\")"
+//	  default: "success"
+type ValueDef struct {
+	Field      string `yaml:"field"`      // JSONPath/dot notation to extract value
+	Expression string `yaml:"expression"` // CEL expression to evaluate
+	Default    any    `yaml:"default"`    // Default value if extraction fails or returns nil
+}
+
+// ParseValueDef attempts to parse a value as a ValueDef.
+// Returns the parsed ValueDef and true if the value contains either field or expression.
+// Returns nil and false if the value is not a value definition.
+func ParseValueDef(v any) (*ValueDef, bool) {
+	// Must be a map to be a value definition
+	if _, ok := v.(map[string]any); !ok {
+		return nil, false
+	}
+
+	// Marshal to YAML then unmarshal to ValueDef
+	data, err := yaml.Marshal(v)
+	if err != nil {
+		return nil, false
+	}
+
+	var valueDef ValueDef
+	if err := yaml.Unmarshal(data, &valueDef); err != nil {
+		return nil, false
+	}
+
+	// Must have at least one of field or expression
+	if valueDef.Field == "" && valueDef.Expression == "" {
+		return nil, false
+	}
+
+	return &valueDef, true
+}
 
 // AdapterConfig represents the complete adapter configuration structure
 type AdapterConfig struct {
@@ -121,10 +174,15 @@ type Header struct {
 	Value string `yaml:"value"`
 }
 
-// CaptureField represents a field capture configuration from API response
+// CaptureField represents a field capture configuration from API response.
+//
+// Supports two modes (mutually exclusive):
+//   - Field: JSONPath expression for simple field extraction (e.g., "{.items[0].name}")
+//   - Expression: CEL expression for complex transformations (e.g., "response.items.filter(i, i.adapter == 'x')")
 type CaptureField struct {
-	Name  string `yaml:"name"`
-	Field string `yaml:"field"`
+	Name       string `yaml:"name"`
+	Field      string `yaml:"field,omitempty"`
+	Expression string `yaml:"expression,omitempty"`
 }
 
 // Condition represents a structured condition

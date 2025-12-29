@@ -10,6 +10,7 @@ This package is used to evaluate preconditions, post-conditions, and other crite
 
 - **Multiple Operators**: equals, notEquals, in, notIn, contains, greaterThan, lessThan, exists
 - **Nested Field Access**: Evaluate deeply nested fields using dot notation (e.g., `status.phase`)
+- **JSONPath Support**: Extract complex values using Kubernetes JSONPath syntax
 - **Type Flexibility**: Handles strings, numbers, arrays, maps, and complex nested structures
 - **Context Management**: Maintain evaluation context with variable storage and retrieval
 - **Error Handling**: Descriptive error messages for debugging
@@ -52,7 +53,7 @@ result, err := evaluator.EvaluateCondition(
 if err != nil {
     log.Fatal(err)
 }
-fmt.Println("Cluster is ready:", result) // true
+fmt.Println("Cluster is ready:", result.Matched) // true
 ```
 
 ### Evaluating Multiple Conditions
@@ -70,7 +71,7 @@ result, err := evaluator.EvaluateConditions(conditions)
 if err != nil {
     log.Fatal(err)
 }
-fmt.Println("All conditions pass:", result)
+fmt.Println("All conditions pass:", result.Matched)
 ```
 
 ### Nested Field Access
@@ -97,6 +98,82 @@ result, err := evaluator.EvaluateCondition(
 )
 ```
 
+### JSONPath Extraction
+
+The `ExtractField` function supports both simple dot notation and Kubernetes JSONPath expressions for complex data extraction. It returns a `*FieldResult` containing the extracted value.
+
+```go
+// Simple dot notation (auto-converted to JSONPath internally)
+result, err := criteria.ExtractField(data, "metadata.name")
+if err != nil {
+    // Parse error (invalid JSONPath syntax)
+}
+fmt.Println(result.Value) // extracted value, or nil if not found
+
+// JSONPath with array index
+result, err := criteria.ExtractField(data, "{.items[0].name}")
+
+// JSONPath with wildcard (returns slice)
+result, err := criteria.ExtractField(data, "{.items[*].name}")
+
+// JSONPath with filter expression
+result, err := criteria.ExtractField(data, "{.items[?(@.adapter=='landing-zone-adapter')].data.namespace.status}")
+```
+
+**FieldResult structure:**
+- `Value`: The extracted value (nil if field not found or empty)
+- `Error`: Runtime extraction error (e.g., field not found) - not a parse error
+
+#### Supported JSONPath Syntax
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `.field` | Child field | `{.metadata.name}` |
+| `[n]` | Array index | `{.items[0]}` |
+| `[*]` | All elements | `{.items[*].name}` |
+| `[?(@.x=='y')]` | Filter by value | `{.items[?(@.status=='Ready')]}` |
+| `[start:end]` | Array slice | `{.items[0:2]}` |
+
+See: [Kubernetes JSONPath Reference](https://kubernetes.io/docs/reference/kubectl/jsonpath/)
+
+### Unified Value Extraction
+
+The `ExtractValue` method provides a unified interface for extracting values using either field (JSONPath) or expression (CEL). This is used by captures, conditions, and payload building.
+
+```go
+// Create evaluator with your data context
+ctx := criteria.NewEvaluationContext()
+ctx.SetVariablesFromMap(responseData)
+evaluator, _ := criteria.NewEvaluator(context.Background(), ctx, log)
+
+// Extract using JSONPath
+result, err := evaluator.ExtractValue("status.phase", "")
+if err != nil {
+    // Parse error only - field not found returns nil value, not error
+    log.Fatal(err)
+}
+if result.Value != nil {
+    fmt.Println("Phase:", result.Value)
+} else {
+    fmt.Println("Field not found, using default")
+}
+
+// Extract using CEL expression
+result, err = evaluator.ExtractValue("", "items.filter(i, i.status == 'active').size()")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Active count:", result.Value)
+```
+
+The `ExtractValueResult` contains:
+- `Value`: The extracted value (nil if field not found or empty)
+- `Source`: The field path or expression used
+
+**Error handling:**
+- Returns `error` (2nd return) only for **parse errors** (invalid JSONPath/CEL syntax)
+- Field not found → `result.Value = nil` (allows caller to use default value)
+
 ### Context Management
 
 ```go
@@ -113,7 +190,7 @@ if ok {
 }
 
 // Get nested field
-val, err := ctx.GetNestedField("cluster.status.phase")
+val, err := ctx.GetField("cluster.status.phase")
 
 // Merge contexts
 ctx2 := criteria.NewEvaluationContext()
@@ -135,27 +212,27 @@ ctx.Set("vpcId", "vpc-12345")
 evaluator := criteria.NewEvaluator(ctx, log)
 
 // Validate cluster is in correct phase
-phaseValid, _ := evaluator.EvaluateCondition(
+phaseResult, _ := evaluator.EvaluateCondition(
     "clusterPhase",
     criteria.OperatorIn,
     []interface{}{"Provisioning", "Installing", "Ready"},
 )
 
 // Validate provider is allowed
-providerValid, _ := evaluator.EvaluateCondition(
+providerResult, _ := evaluator.EvaluateCondition(
     "cloudProvider",
     criteria.OperatorIn,
     []interface{}{"aws", "gcp", "azure"},
 )
 
 // Validate VPC exists
-vpcExists, _ := evaluator.EvaluateCondition(
+vpcResult, _ := evaluator.EvaluateCondition(
     "vpcId",
     criteria.OperatorExists,
     nil,
 )
 
-if phaseValid && providerValid && vpcExists {
+if phaseResult.Matched && providerResult.Matched && vpcResult.Matched {
     fmt.Println("Cluster validation passed")
 }
 ```
@@ -182,20 +259,20 @@ ctx.Set("resources", map[string]interface{}{
 evaluator := criteria.NewEvaluator(ctx, log)
 
 // Check namespace is active
-nsActive, _ := evaluator.EvaluateCondition(
+nsResult, _ := evaluator.EvaluateCondition(
     "resources.clusterNamespace.status.phase",
     criteria.OperatorEquals,
     "Active",
 )
 
 // Check all replicas are ready
-allReady, _ := evaluator.EvaluateCondition(
+replicasResult, _ := evaluator.EvaluateCondition(
     "resources.clusterController.status.readyReplicas",
     criteria.OperatorGreaterThan,
     0,
 )
 
-if nsActive && allReady {
+if nsResult.Matched && replicasResult.Matched {
     fmt.Println("Resources are healthy")
 }
 ```
@@ -213,7 +290,7 @@ result, _ := evaluator.EvaluateCondition(
     criteria.OperatorContains,
     "ready",
 )
-fmt.Println("Message contains 'ready':", result) // true
+fmt.Println("Message contains 'ready':", result.Matched) // true
 
 // Array contains
 ctx.Set("tags", []interface{}{"production", "us-east-1", "critical"})
@@ -222,7 +299,7 @@ result, _ = evaluator.EvaluateCondition(
     criteria.OperatorContains,
     "production",
 )
-fmt.Println("Tags contain 'production':", result) // true
+fmt.Println("Tags contain 'production':", result.Matched) // true
 ```
 
 ### Example 4: Numeric Comparisons
@@ -236,19 +313,19 @@ ctx.Set("maxNodes", 10)
 evaluator := criteria.NewEvaluator(ctx, log)
 
 // Check if within range
-aboveMin, _ := evaluator.EvaluateCondition(
+aboveMinResult, _ := evaluator.EvaluateCondition(
     "nodeCount",
     criteria.OperatorGreaterThan,
     0, // nodeCount > 0 means >= 1
 )
 
-belowMax, _ := evaluator.EvaluateCondition(
+belowMaxResult, _ := evaluator.EvaluateCondition(
     "nodeCount",
     criteria.OperatorLessThan,
     11, // nodeCount < 11 means <= 10
 )
 
-if aboveMin && belowMax {
+if aboveMinResult.Matched && belowMaxResult.Matched {
     fmt.Println("Node count is within valid range")
 }
 ```
@@ -291,7 +368,7 @@ if err != nil {
     log.Fatal(err)
 }
 
-if result {
+if result.Matched {
     fmt.Println("Precondition passed - proceeding with resource creation")
 } else {
     fmt.Println("Precondition failed - skipping resource creation")

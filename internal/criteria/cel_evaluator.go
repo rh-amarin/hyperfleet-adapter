@@ -1,29 +1,23 @@
 package criteria
 
 import (
-	"context"
 	"fmt"
-	"reflect"
-	"strconv"
 	"strings"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	apperrors "github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/errors"
-	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 )
 
 // CELEvaluator evaluates CEL expressions against a context
 type CELEvaluator struct {
 	env     *cel.Env
 	evalCtx *EvaluationContext
-	log     logger.Logger
-	ctx     context.Context
 }
 
 // CELResult contains the result of evaluating a CEL expression.
-// When using EvaluateSafe, errors are captured in Error/ErrorReason instead of being returned,
+// When using EvaluateSafe, errors are captured in Error instead of being returned,
 // allowing the caller to decide how to handle failures (e.g., treat as false, log, etc.).
 type CELResult struct {
 	// Value is the result of the CEL expression evaluation (nil if error)
@@ -37,10 +31,8 @@ type CELResult struct {
 	// Expression is the original expression that was evaluated
 	Expression string
 	// Error indicates if evaluation failed (nil if successful)
+	// Common causes: "field not found", "null value access", "type mismatch"
 	Error error
-	// ErrorReason provides a human-readable error description
-	// Common values: "field not found", "null value access", "type mismatch"
-	ErrorReason string
 }
 
 // HasError returns true if the evaluation resulted in an error
@@ -48,14 +40,9 @@ func (r *CELResult) HasError() bool {
 	return r.Error != nil
 }
 
-// IsSuccess returns true if the evaluation succeeded without error
-func (r *CELResult) IsSuccess() bool {
-	return r.Error == nil
-}
-
 // newCELEvaluator creates a new CEL evaluator with the given context
 // NOTE: Caller (NewEvaluator) is responsible for parameter validation
-func newCELEvaluator(ctx context.Context, evalCtx *EvaluationContext, log logger.Logger) (*CELEvaluator, error) {
+func newCELEvaluator(evalCtx *EvaluationContext) (*CELEvaluator, error) {
 	// Build CEL environment with variables from context
 	options := buildCELOptions(evalCtx)
 
@@ -67,8 +54,6 @@ func newCELEvaluator(ctx context.Context, evalCtx *EvaluationContext, log logger
 	return &CELEvaluator{
 		env:     env,
 		evalCtx: evalCtx,
-		log:     log,
-		ctx:     ctx,
 	}, nil
 }
 
@@ -165,13 +150,12 @@ func (e *CELEvaluator) EvaluateSafe(expression string) (*CELResult, error) {
 	if err != nil {
 		// Capture evaluation error in result - this is the "safe" part
 		// These errors are expected when data fields don't exist yet
-		e.log.Debugf(e.ctx, "CEL evaluation failed for %q: %v", expression, err)
+		// Caller should handle logging based on CELResult.Error
 		return &CELResult{
-			Value:       nil,
-			Matched:     false,
-			Expression:  expression,
-			Error:       apperrors.NewCELEvalError(expression, err),
-			ErrorReason: err.Error(),
+			Value:      nil,
+			Matched:    false,
+			Expression: expression,
+			Error:      apperrors.NewCELEvalError(expression, err),
 		}, nil // No error returned - evaluation errors are captured in result
 	}
 
@@ -279,107 +263,4 @@ func isEmptyValue(val ref.Val) bool {
 		}
 		return false
 	}
-}
-
-// ConditionToCEL converts a structured condition to a CEL expression.
-// The generated expression does NOT include null-safety guards - if the field
-// doesn't exist, CEL will return an error which is captured by EvaluateSafe().
-// This allows the caller to decide how to handle missing fields at a higher level.
-func ConditionToCEL(field, operator string, value interface{}) (string, error) {
-	celValue, err := formatCELValue(value)
-	if err != nil {
-		return "", err
-	}
-
-	switch operator {
-	case "equals":
-		return fmt.Sprintf("%s == %s", field, celValue), nil
-	case "notEquals":
-		return fmt.Sprintf("%s != %s", field, celValue), nil
-	case "in":
-		return fmt.Sprintf("%s in %s", field, celValue), nil
-	case "notIn":
-		return fmt.Sprintf("!(%s in %s)", field, celValue), nil
-	case "contains":
-		return fmt.Sprintf("%s.contains(%s)", field, celValue), nil
-	case "greaterThan":
-		return fmt.Sprintf("%s > %s", field, celValue), nil
-	case "lessThan":
-		return fmt.Sprintf("%s < %s", field, celValue), nil
-	case "exists":
-		// For nested paths, use has() which checks if the field exists
-		// Note: has(a.b.c) will error if a.b doesn't exist - caller handles via EvaluateSafe
-		if strings.Contains(field, ".") {
-			return fmt.Sprintf("has(%s)", field), nil
-		}
-		// For top-level variables, check not null and not empty string
-		return fmt.Sprintf("(%s != null && %s != \"\")", field, field), nil
-	default:
-		return "", apperrors.NewCELUnsupportedOperatorError(operator)
-	}
-}
-
-// formatCELValue formats a Go value as a CEL literal
-func formatCELValue(value interface{}) (string, error) {
-	if value == nil {
-		return "null", nil
-	}
-
-	switch v := value.(type) {
-	case string:
-		return strconv.Quote(v), nil
-	case bool:
-		return fmt.Sprintf("%t", v), nil
-	case int, int8, int16, int32, int64:
-		return fmt.Sprintf("%d", v), nil
-	case uint, uint8, uint16, uint32, uint64:
-		return fmt.Sprintf("%du", v), nil
-	case float32, float64:
-		return fmt.Sprintf("%v", v), nil
-	case []interface{}:
-		items := make([]string, len(v))
-		for i, item := range v {
-			formatted, err := formatCELValue(item)
-			if err != nil {
-				return "", err
-			}
-			items[i] = formatted
-		}
-		return fmt.Sprintf("[%s]", strings.Join(items, ", ")), nil
-	default:
-		// Handle other slice/array types via reflection
-		rv := reflect.ValueOf(value)
-		switch rv.Kind() {
-		case reflect.Slice, reflect.Array:
-			items := make([]string, rv.Len())
-			for i := 0; i < rv.Len(); i++ {
-				formatted, err := formatCELValue(rv.Index(i).Interface())
-				if err != nil {
-					return "", err
-				}
-				items[i] = formatted
-			}
-			return fmt.Sprintf("[%s]", strings.Join(items, ", ")), nil
-		default:
-			return "", apperrors.NewCELUnsupportedTypeError(fmt.Sprintf("%T", value))
-		}
-	}
-}
-
-// ConditionsToCEL converts multiple conditions to a single CEL expression (AND logic)
-func ConditionsToCEL(conditions []ConditionDef) (string, error) {
-	if len(conditions) == 0 {
-		return "true", nil
-	}
-
-	expressions := make([]string, len(conditions))
-	for i, cond := range conditions {
-		expr, err := ConditionToCEL(cond.Field, string(cond.Operator), cond.Value)
-		if err != nil {
-			return "", apperrors.NewCELConditionConversionError(i, err)
-		}
-		expressions[i] = "(" + expr + ")"
-	}
-
-	return strings.Join(expressions, " && "), nil
 }

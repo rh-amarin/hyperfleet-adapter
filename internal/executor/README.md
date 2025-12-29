@@ -159,12 +159,78 @@ preconditions:
       method: "GET"
       url: "{{ .apiBaseUrl }}/clusters/{{ .clusterId }}"
     capture:
+      # Simple dot notation
       - name: "clusterPhase"
         field: "status.phase"
+      
+      # JSONPath for complex extraction
+      - name: "lzStatus"
+        field: "{.items[?(@.adapter=='landing-zone-adapter')].data.namespace.status}"
+      
+      # CEL expression for computed values
+      - name: "activeCount"
+        expression: "items.filter(i, i.status == 'active').size()"
     conditions:
+      # Access captured values
       - field: "clusterPhase"
         operator: "in"
         value: ["Ready", "Provisioning"]
+      
+      # Or dig directly into API response using precondition name
+      - field: "checkClusterStatus.status.nodeCount"
+        operator: "greaterThan"
+        value: 0
+```
+
+**Capture modes:**
+- `field`: Simple dot notation (`status.phase`) or JSONPath (`{.items[*].name}`)
+- `expression`: CEL expression for computed values
+
+Only one of `field` or `expression` can be set per capture.
+
+</details>
+
+#### Data Scopes
+
+Preconditions have **two different data scopes** for capture and conditions:
+
+| Operation | Data Scope | Available Variables |
+|-----------|------------|---------------------|
+| **Capture** (`field`/`expression`) | API Response only | Only the parsed JSON response (e.g., `status.phase`, `items[0].name`) |
+| **Conditions** (`conditions`/`expression`) | Full execution context | `params.*`, `<precondition-name>.*`, `adapter.*`, `resources.*` |
+
+**Conditions scope details:**
+
+| Variable | Source |
+|----------|--------|
+| `params.*` | Original extracted params |
+| `<precondition-name>.*` | Full API response from that precondition (e.g., `checkClusterStatus.status.phase`) |
+| `capturedField` | Explicitly captured fields (added to params) |
+| `adapter.*` | Adapter metadata |
+| `resources.*` | Created resources (empty during preconditions) |
+
+<details>
+<summary>Example: Digging into API response in conditions</summary>
+
+```yaml
+preconditions:
+  - name: "getCluster"
+    apiCall:
+      url: "{{ .apiBaseUrl }}/clusters/{{ .clusterId }}"
+      method: GET
+    # No need to capture everything - conditions can access full response
+    conditions:
+      # Access response directly via precondition name
+      - field: "getCluster.status.phase"
+        operator: "equals"
+        value: "Ready"
+      - field: "getCluster.spec.nodeCount"
+        operator: "greaterThan"
+        value: 0
+    # Or use CEL expression with full access
+    expression: |
+      getCluster.status.phase == "Ready" && 
+      size(getCluster.spec.nodes) > 0
 ```
 
 </details>
@@ -251,10 +317,11 @@ post:
     - name: "statusPayload"
       build:
         status:
-          expression: |
-            resources.clusterController.status.readyReplicas > 0
-        message:
-          value: "Deployment successful"
+          expression: "resources.clusterController.status.readyReplicas > 0"
+        message: "Deployment successful"  # Direct string (Go template supported)
+        errorMessage:
+          field: "adapter.errorMessage"   # JSONPath extraction
+          default: ""                     # Fallback if field not found
   
   postActions:
     - name: "reportStatus"
@@ -263,6 +330,11 @@ post:
         url: "{{ .apiBaseUrl }}/clusters/{{ .clusterId }}/status"
         body: "{{ .statusPayload }}"
 ```
+
+**Payload value types:**
+- Direct string: `message: "Success"` (Go template rendered)
+- Field extraction: `{ field: "path.to.field", default: "fallback" }`
+- CEL expression: `{ expression: "items.size() > 0", default: false }`
 
 </details>
 
@@ -343,16 +415,14 @@ post:
     - name: "statusPayload"
       build:
         status:
-          expression: |
-            adapter.executionStatus == "success" && !adapter.resourcesSkipped
+          expression: "adapter.executionStatus == 'success' && !adapter.resourcesSkipped"
         reason:
-          expression: |
-            adapter.resourcesSkipped ? "PreconditionNotMet" : 
-            (adapter.errorReason != "" ? adapter.errorReason : "Healthy")
+          expression: "adapter.resourcesSkipped ? 'PreconditionNotMet' : (adapter.errorReason != '' ? adapter.errorReason : 'Healthy')"
+          default: "Unknown"
         message:
-          expression: |
-            adapter.skipReason != "" ? adapter.skipReason :
-            (adapter.errorMessage != "" ? adapter.errorMessage : "Success")
+          expression: "adapter.skipReason != '' ? adapter.skipReason : (adapter.errorMessage != '' ? adapter.errorMessage : 'Success')"
+          default: "No message"
+        observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
   postActions:
     - name: "reportStatus"
       apiCall:

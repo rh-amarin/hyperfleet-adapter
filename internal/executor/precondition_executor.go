@@ -118,18 +118,37 @@ func (pe *PreconditionExecutor) executePrecondition(ctx context.Context, precond
 			return result, NewExecutorError(PhasePreconditions, precond.Name, "failed to parse API response", err)
 		}
 
+		// Store full response under precondition name for condition digging
+		// e.g., conditions can access "check-cluster.status.phase"
+		execCtx.Params[precond.Name] = responseData
+
 		// Capture fields from response
 		if len(precond.Capture) > 0 {
 			pe.log.Infof(ctx, "Capturing %d fields from API response", len(precond.Capture))
-			for _, capture := range precond.Capture {
-				value, err := captureFieldFromData(responseData, capture.Field)
-				if err != nil {
-					pe.log.Warnf(ctx, "Failed to capture field '%s' as '%s': %v", capture.Field, capture.Name, err)
-					continue
+
+			// Create evaluator with response data only
+			// Both field (JSONPath) and expression (CEL) work on the same source
+			captureCtx := criteria.NewEvaluationContext()
+			captureCtx.SetVariablesFromMap(responseData)
+
+			captureEvaluator, evalErr := criteria.NewEvaluator(ctx, captureCtx, pe.log)
+			if evalErr != nil {
+				pe.log.Warnf(ctx, "Failed to create capture evaluator: %v", evalErr)
+			} else {
+				for _, capture := range precond.Capture {
+					extractResult, err := captureEvaluator.ExtractValue(capture.Field, capture.Expression)
+					if err != nil {
+						return result, err
+					}
+					// Error is not nil when there is field missing that is not a bug, but a valid use case
+					if extractResult.Error != nil {
+						pe.log.Warnf(ctx, "Failed to capture '%s' with error: %v", capture.Name, extractResult.Error)
+						continue
+					}
+					result.CapturedFields[capture.Name] = extractResult.Value
+					execCtx.Params[capture.Name] = extractResult.Value
+					pe.log.Debugf(ctx, "Captured %s = %v (from %s)", capture.Name, extractResult.Value, extractResult.Source)
 				}
-				result.CapturedFields[capture.Name] = value
-				execCtx.Params[capture.Name] = value
-				pe.log.Debugf(ctx, "Captured %s = %v (from %s)", capture.Name, value, capture.Field)
 			}
 		}
 		pe.log.Infof(ctx, "API call successful, response captured")
@@ -153,7 +172,7 @@ func (pe *PreconditionExecutor) executePrecondition(ctx context.Context, precond
 		pe.log.Infof(ctx, "Evaluating %d structured conditions", len(precond.Conditions))
 		condDefs := ToConditionDefs(precond.Conditions)
 
-		condResult, err := evaluator.EvaluateConditionsWithResult(condDefs)
+		condResult, err := evaluator.EvaluateConditions(condDefs)
 		if err != nil {
 			result.Status = StatusFailed
 			result.Error = err
@@ -216,39 +235,12 @@ func (pe *PreconditionExecutor) executeAPICall(ctx context.Context, apiCall *con
 	return resp.Body, nil
 }
 
-// captureFieldFromData captures a field from API response data using dot notation
-func captureFieldFromData(data map[string]interface{}, path string) (interface{}, error) {
-	parts := strings.Split(path, ".")
-	var current interface{} = data
-
-	for i, part := range parts {
-		switch v := current.(type) {
-		case map[string]interface{}:
-			val, ok := v[part]
-			if !ok {
-				return nil, fmt.Errorf("field '%s' not found at path '%s'", part, strings.Join(parts[:i+1], "."))
-			}
-			current = val
-		case map[interface{}]interface{}:
-			val, ok := v[part]
-			if !ok {
-				return nil, fmt.Errorf("field '%s' not found at path '%s'", part, strings.Join(parts[:i+1], "."))
-			}
-			current = val
-		default:
-			return nil, fmt.Errorf("cannot access field '%s': parent is not a map (got %T)", part, current)
-		}
-	}
-
-	return current, nil
-}
-
 // formatConditionDetails formats condition evaluation details for error messages
 func formatConditionDetails(result PreconditionResult) string {
 	var details []string
 
 	if result.CELResult != nil && result.CELResult.HasError() {
-		details = append(details, fmt.Sprintf("CEL error: %s", result.CELResult.ErrorReason))
+		details = append(details, fmt.Sprintf("CEL error: %v", result.CELResult.Error))
 	}
 
 	for _, condResult := range result.ConditionResults {

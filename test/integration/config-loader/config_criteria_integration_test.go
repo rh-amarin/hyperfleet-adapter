@@ -82,7 +82,7 @@ func TestConfigLoadAndCriteriaEvaluation(t *testing.T) {
 		for i, cond := range precond.Conditions {
 			t.Logf("Evaluating condition %d: %s %s %v", i, cond.Field, cond.Operator, cond.Value)
 
-			result, err := evaluator.EvaluateConditionWithResult(
+			result, err := evaluator.EvaluateCondition(
 				cond.Field,
 				criteria.Operator(cond.Operator),
 				cond.Value,
@@ -108,7 +108,7 @@ func TestConfigLoadAndCriteriaEvaluation(t *testing.T) {
 		}
 
 		// Evaluate all conditions together
-		result, err := evaluator.EvaluateConditionsWithResult(conditions)
+		result, err := evaluator.EvaluateConditions(conditions)
 		require.NoError(t, err)
 		assert.True(t, result.Matched, "all preconditions should pass")
 		assert.Equal(t, -1, result.FailedCondition, "no condition should fail")
@@ -116,61 +116,6 @@ func TestConfigLoadAndCriteriaEvaluation(t *testing.T) {
 		// Verify extracted fields
 		assert.NotEmpty(t, result.ExtractedFields)
 		t.Logf("Extracted fields: %v", result.ExtractedFields)
-	})
-}
-
-// TestConfigConditionsToCEL tests converting config conditions to CEL expressions
-func TestConfigConditionsToCEL(t *testing.T) {
-	configPath := getConfigPath()
-	config, err := config_loader.Load(configPath)
-	require.NoError(t, err)
-
-	precond := config.GetPreconditionByName("clusterStatus")
-	require.NotNil(t, precond)
-
-	t.Run("convert conditions to CEL", func(t *testing.T) {
-		conditions := make([]criteria.ConditionDef, len(precond.Conditions))
-		for i, cond := range precond.Conditions {
-			conditions[i] = criteria.ConditionDef{
-				Field:    cond.Field,
-				Operator: criteria.Operator(cond.Operator),
-				Value:    cond.Value,
-			}
-		}
-
-		// Convert to CEL
-		celExpr, err := criteria.ConditionsToCEL(conditions)
-		require.NoError(t, err)
-		assert.NotEmpty(t, celExpr)
-		t.Logf("Generated CEL expression: %s", celExpr)
-
-		// Verify each individual condition converts to CEL
-		for i, cond := range precond.Conditions {
-			expr, err := criteria.ConditionToCEL(cond.Field, cond.Operator, cond.Value)
-			require.NoError(t, err, "condition %d should convert to CEL", i)
-			t.Logf("Condition %d CEL: %s", i, expr)
-		}
-	})
-
-	t.Run("evaluate converted CEL expression", func(t *testing.T) {
-		ctx := criteria.NewEvaluationContext()
-		ctx.Set("clusterPhase", "NotReady") // Must match template condition
-
-		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
-		require.NoError(t, err)
-		conditions := make([]criteria.ConditionDef, len(precond.Conditions))
-		for i, cond := range precond.Conditions {
-			conditions[i] = criteria.ConditionDef{
-				Field:    cond.Field,
-				Operator: criteria.Operator(cond.Operator),
-				Value:    cond.Value,
-			}
-		}
-
-		// Evaluate as CEL
-		result, err := evaluator.EvaluateConditionsAsCEL(conditions)
-		require.NoError(t, err)
-		assert.True(t, result.Matched)
 	})
 }
 
@@ -198,7 +143,7 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 			}
 		}
 
-		result, err := evaluator.EvaluateConditionsWithResult(conditions)
+		result, err := evaluator.EvaluateConditions(conditions)
 		require.NoError(t, err)
 		assert.False(t, result.Matched, "preconditions should fail with wrong phase")
 		assert.Equal(t, 0, result.FailedCondition, "first condition (clusterPhase) should fail")
@@ -219,7 +164,7 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 			}
 		}
 
-		result, err := evaluator.EvaluateConditionsWithResult(conditions)
+		result, err := evaluator.EvaluateConditions(conditions)
 		require.NoError(t, err)
 		assert.False(t, result.Matched, "preconditions should fail when phase is Ready (expected NotReady)")
 	})
@@ -231,8 +176,9 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
 		require.NoError(t, err)
 		// Just check the vpcId exists condition (this is a general test, not tied to template)
-		result := evaluator.EvaluateConditionSafe("vpcId", criteria.OperatorExists, true)
-		assert.False(t, result, "exists check should fail when field is missing")
+		result, err := evaluator.EvaluateCondition("vpcId", criteria.OperatorExists, true)
+		// Either error or not matched means exists check fails
+		assert.True(t, err != nil || !result.Matched, "exists check should fail when field is missing")
 	})
 }
 
@@ -319,20 +265,20 @@ func TestConfigPostProcessingEvaluation(t *testing.T) {
 		require.NoError(t, err)
 		// Test accessing nested K8s resource data
 		t.Run("access namespace status", func(t *testing.T) {
-			value, err := evaluator.GetField("resources.clusterNamespace.status.phase")
+			result, err := evaluator.ExtractValue("resources.clusterNamespace.status.phase", "")
 			require.NoError(t, err)
-			assert.Equal(t, "Active", value)
+			assert.Equal(t, "Active", result.Value)
 		})
 
 		t.Run("access deployment replicas", func(t *testing.T) {
-			value, err := evaluator.GetField("resources.clusterController.status.readyReplicas")
+			result, err := evaluator.ExtractValue("resources.clusterController.status.readyReplicas", "")
 			require.NoError(t, err)
-			assert.Equal(t, 3, value)
+			assert.Equal(t, 3, result.Value)
 		})
 
 		t.Run("evaluate deployment ready condition", func(t *testing.T) {
 			// Check if ready replicas > 0
-			result, err := evaluator.EvaluateConditionWithResult(
+			result, err := evaluator.EvaluateCondition(
 				"resources.clusterController.status.readyReplicas",
 				criteria.OperatorGreaterThan,
 				0,
@@ -344,9 +290,11 @@ func TestConfigPostProcessingEvaluation(t *testing.T) {
 
 		t.Run("evaluate replicas match", func(t *testing.T) {
 			// Check replicas == readyReplicas
-			replicas, _ := evaluator.GetField("resources.clusterController.status.replicas")
-			readyReplicas, _ := evaluator.GetField("resources.clusterController.status.readyReplicas")
-			assert.Equal(t, replicas, readyReplicas)
+			replicasResult, err := evaluator.ExtractValue("resources.clusterController.status.replicas", "")
+			require.NoError(t, err)
+			readyReplicasResult, err := evaluator.ExtractValue("resources.clusterController.status.readyReplicas", "")
+			require.NoError(t, err)
+			assert.Equal(t, replicasResult.Value, readyReplicasResult.Value)
 		})
 
 		t.Run("evaluate with CEL expression", func(t *testing.T) {
@@ -379,24 +327,19 @@ func TestConfigNullSafetyWithMissingResources(t *testing.T) {
 
 		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
 		require.NoError(t, err)
-		// Safe access to missing resource
-		value := evaluator.GetFieldSafe("resources.clusterController.status.readyReplicas")
-		assert.Nil(t, value, "should return nil for null resource")
 
-		// Default value for missing resource
-		value = evaluator.GetFieldOrDefault("resources.clusterController.status.readyReplicas", 0)
-		assert.Equal(t, 0, value, "should return default for null resource")
+		// ExtractValue returns nil value (not error) for null path - allows default to be used
+		result, extractErr := evaluator.ExtractValue("resources.clusterController.status.readyReplicas", "")
+		assert.NoError(t, extractErr, "no parse error for valid path")
+		assert.Nil(t, result.Value, "should return nil value for null resource path")
 
-		// HasField should return false
-		assert.False(t, evaluator.HasField("resources.clusterController.status"))
-
-		// Safe evaluation should return false
-		result := evaluator.EvaluateConditionSafe(
+		// Evaluation should error or return false for null path
+		condResult, err := evaluator.EvaluateCondition(
 			"resources.clusterController.status.readyReplicas",
 			criteria.OperatorGreaterThan,
 			0,
 		)
-		assert.False(t, result, "should safely return false for null path")
+		assert.True(t, err != nil || !condResult.Matched, "should fail for null path")
 	})
 
 	t.Run("handle deeply nested null", func(t *testing.T) {
@@ -410,9 +353,10 @@ func TestConfigNullSafetyWithMissingResources(t *testing.T) {
 		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
 		require.NoError(t, err)
 
-		// Should handle null status gracefully
-		value := evaluator.GetFieldOrDefault("resources.clusterController.status.readyReplicas", -1)
-		assert.Equal(t, -1, value)
+		// Should return nil value (not error) for null status path
+		result, err := evaluator.ExtractValue("resources.clusterController.status.readyReplicas", "")
+		assert.NoError(t, err, "no parse error for valid path")
+		assert.Nil(t, result.Value, "should return nil value for null path")
 	})
 }
 

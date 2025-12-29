@@ -167,32 +167,6 @@ func TestBuildMapPayload(t *testing.T) {
 				},
 			},
 		},
-		{
-			name: "value definition",
-			input: map[string]interface{}{
-				"field": map[string]interface{}{
-					"value": "static value",
-				},
-			},
-			params: map[string]interface{}{},
-			expected: map[string]interface{}{
-				"field": "static value",
-			},
-		},
-		{
-			name: "value definition with template",
-			input: map[string]interface{}{
-				"field": map[string]interface{}{
-					"value": "cluster-{{ .id }}",
-				},
-			},
-			params: map[string]interface{}{
-				"id": "123",
-			},
-			expected: map[string]interface{}{
-				"field": "cluster-123",
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -274,22 +248,6 @@ func TestProcessValue(t *testing.T) {
 			params:      map[string]interface{}{},
 			evalCtxData: map[string]interface{}{"count": 5},
 			expected:    int64(10),
-		},
-		{
-			name: "value definition",
-			value: map[string]interface{}{
-				"value": "static",
-			},
-			params:   map[string]interface{}{},
-			expected: "static",
-		},
-		{
-			name: "value definition with non-string",
-			value: map[string]interface{}{
-				"value": 123,
-			},
-			params:   map[string]interface{}{},
-			expected: 123,
 		},
 		{
 			name:     "slice processing",

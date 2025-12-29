@@ -159,18 +159,21 @@ func (pae *PostActionExecutor) buildMapPayload(ctx context.Context, m map[string
 func (pae *PostActionExecutor) processValue(ctx context.Context, v any, evaluator *criteria.Evaluator, params map[string]any) (any, error) {
 	switch val := v.(type) {
 	case map[string]any:
-		// Check if this is an expression definition
-		if result, ok := evaluator.EvaluateExpressionDef(val); ok {
-			return result, nil
-		}
-
-		// Check if this is a simple value definition
-		if value, ok := criteria.GetValueDef(val); ok {
-			// Render template if it's a string
-			if strVal, ok := value.(string); ok {
-				return renderTemplate(strVal, params)
+		// Check if this is a value definition: { field: "...", default: ... } or { expression: "...", default: ... }
+		if valueDef, ok := config_loader.ParseValueDef(val); ok {
+			result, err := evaluator.ExtractValue(valueDef.Field, valueDef.Expression)
+			// err indicates parse error - fail fast (bug in config)
+			if err != nil {
+				return nil, err
 			}
-			return value, nil
+			// If value is nil (field not found or empty), use default
+			if result.Value == nil {
+				if valueDef.Default != nil {
+					pae.log.Debugf(ctx, "Using default value for '%s': %v", result.Source, valueDef.Default)
+				}
+				return valueDef.Default, nil
+			}
+			return result.Value, nil
 		}
 
 		// Recursively process nested maps

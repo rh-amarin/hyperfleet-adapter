@@ -55,7 +55,7 @@ func TestRealWorldScenario(t *testing.T) {
 			[]interface{}{"Provisioning", "Installing", "Ready"},
 		)
 		require.NoError(t, err)
-		assert.True(t, result, "cluster phase should be in valid phases")
+		assert.True(t, result.Matched, "cluster phase should be in valid phases")
 	})
 
 	t.Run("cloudProvider in allowed providers", func(t *testing.T) {
@@ -65,7 +65,7 @@ func TestRealWorldScenario(t *testing.T) {
 			[]interface{}{"aws", "gcp", "azure"},
 		)
 		require.NoError(t, err)
-		assert.True(t, result, "cloud provider should be in allowed providers")
+		assert.True(t, result.Matched, "cloud provider should be in allowed providers")
 	})
 
 	t.Run("vpcId exists", func(t *testing.T) {
@@ -75,7 +75,7 @@ func TestRealWorldScenario(t *testing.T) {
 			nil,
 		)
 		require.NoError(t, err)
-		assert.True(t, result, "vpcId should exist")
+		assert.True(t, result.Matched, "vpcId should exist")
 	})
 
 	t.Run("evaluate all preconditions together", func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestRealWorldScenario(t *testing.T) {
 
 		result, err := evaluator.EvaluateConditions(conditions)
 		require.NoError(t, err)
-		assert.True(t, result, "all preconditions should pass")
+		assert.True(t, result.Matched, "all preconditions should pass")
 	})
 }
 
@@ -129,7 +129,7 @@ func TestResourceStatusEvaluation(t *testing.T) {
 			"Active",
 		)
 		require.NoError(t, err)
-		assert.True(t, result)
+		assert.True(t, result.Matched)
 	})
 
 	t.Run("replicas equal ready replicas", func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestResourceStatusEvaluation(t *testing.T) {
 			3,
 		)
 		require.NoError(t, err)
-		assert.True(t, result)
+		assert.True(t, result.Matched)
 
 		result, err = localEvaluator.EvaluateCondition(
 			"readyReplicas",
@@ -153,7 +153,7 @@ func TestResourceStatusEvaluation(t *testing.T) {
 			0,
 		)
 		require.NoError(t, err)
-		assert.True(t, result)
+		assert.True(t, result.Matched)
 	})
 }
 
@@ -180,7 +180,7 @@ func TestComplexNestedConditions(t *testing.T) {
 			"success",
 		)
 		require.NoError(t, err)
-		assert.True(t, result)
+		assert.True(t, result.Matched)
 	})
 
 	t.Run("resources were created", func(t *testing.T) {
@@ -190,7 +190,7 @@ func TestComplexNestedConditions(t *testing.T) {
 			"namespace",
 		)
 		require.NoError(t, err)
-		assert.True(t, result)
+		assert.True(t, result.Matched)
 	})
 }
 
@@ -221,7 +221,7 @@ func TestMapKeyContainment(t *testing.T) {
 			"app",
 		)
 		require.NoError(t, err)
-		assert.True(t, result, "map should contain key 'app'")
+		assert.True(t, result.Matched, "map should contain key 'app'")
 	})
 
 	t.Run("map contains key - not found", func(t *testing.T) {
@@ -231,7 +231,7 @@ func TestMapKeyContainment(t *testing.T) {
 			"nonexistent",
 		)
 		require.NoError(t, err)
-		assert.False(t, result, "map should not contain key 'nonexistent'")
+		assert.False(t, result.Matched, "map should not contain key 'nonexistent'")
 	})
 
 	t.Run("typed map contains key", func(t *testing.T) {
@@ -241,7 +241,7 @@ func TestMapKeyContainment(t *testing.T) {
 			"owner",
 		)
 		require.NoError(t, err)
-		assert.True(t, result, "typed map should contain key 'owner'")
+		assert.True(t, result.Matched, "typed map should contain key 'owner'")
 	})
 
 	t.Run("check label exists pattern", func(t *testing.T) {
@@ -252,7 +252,95 @@ func TestMapKeyContainment(t *testing.T) {
 			"environment",
 		)
 		require.NoError(t, err)
-		assert.True(t, result, "labels should contain 'environment' key")
+		assert.True(t, result.Matched, "labels should contain 'environment' key")
+	})
+}
+
+// TestContainsOperatorEdgeCases tests edge cases for the contains operator
+func TestContainsOperatorEdgeCases(t *testing.T) {
+	ctx := NewEvaluationContext()
+
+	// String field
+	ctx.Set("message", "hello world")
+
+	// Slice field
+	ctx.Set("tags", []interface{}{"alpha", "beta", "gamma"})
+
+	// Integer slice
+	ctx.Set("numbers", []int{1, 2, 3, 4, 5})
+
+	// Unsupported type (int)
+	ctx.Set("count", 42)
+
+	// Nil value
+	ctx.Set("nilField", nil)
+
+	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
+	require.NoError(t, err)
+
+	t.Run("string contains substring - found", func(t *testing.T) {
+		result, err := evaluator.EvaluateCondition("message", OperatorContains, "world")
+		require.NoError(t, err)
+		assert.True(t, result.Matched)
+	})
+
+	t.Run("string contains substring - not found", func(t *testing.T) {
+		result, err := evaluator.EvaluateCondition("message", OperatorContains, "foo")
+		require.NoError(t, err)
+		assert.False(t, result.Matched)
+	})
+
+	t.Run("string with non-string needle - error", func(t *testing.T) {
+		_, err := evaluator.EvaluateCondition("message", OperatorContains, 123)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "needle must be a string")
+	})
+
+	t.Run("slice contains element - found", func(t *testing.T) {
+		result, err := evaluator.EvaluateCondition("tags", OperatorContains, "beta")
+		require.NoError(t, err)
+		assert.True(t, result.Matched)
+	})
+
+	t.Run("slice contains element - not found", func(t *testing.T) {
+		result, err := evaluator.EvaluateCondition("tags", OperatorContains, "delta")
+		require.NoError(t, err)
+		assert.False(t, result.Matched)
+	})
+
+	t.Run("int slice contains element", func(t *testing.T) {
+		result, err := evaluator.EvaluateCondition("numbers", OperatorContains, 3)
+		require.NoError(t, err)
+		assert.True(t, result.Matched)
+	})
+
+	t.Run("int slice does not contain element", func(t *testing.T) {
+		result, err := evaluator.EvaluateCondition("numbers", OperatorContains, 99)
+		require.NoError(t, err)
+		assert.False(t, result.Matched)
+	})
+
+	t.Run("unsupported field type - error", func(t *testing.T) {
+		_, err := evaluator.EvaluateCondition("count", OperatorContains, 1)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "contains operator requires string, slice, array, or map")
+	})
+
+	t.Run("nil field value - returns not matched", func(t *testing.T) {
+		// When field is nil, EvaluateCondition continues with nil value
+		// evaluateContains should return error for nil fieldValue
+		result, err := evaluator.EvaluateCondition("nilField", OperatorContains, "test")
+		// The condition evaluation handles nil - it gets the value as nil
+		// The contains operator returns error for nil
+		require.Error(t, err)
+		assert.Nil(t, result)
+	})
+
+	t.Run("missing field - returns not matched", func(t *testing.T) {
+		result, err := evaluator.EvaluateCondition("missingField", OperatorContains, "test")
+		// Missing field returns nil value, contains with nil returns error
+		require.Error(t, err)
+		assert.Nil(t, result)
 	})
 }
 
@@ -274,7 +362,7 @@ func TestTerminatingClusterScenario(t *testing.T) {
 			[]interface{}{"Provisioning", "Installing", "Ready"},
 		)
 		require.NoError(t, err)
-		assert.False(t, result, "terminating cluster should not pass preconditions")
+		assert.False(t, result.Matched, "terminating cluster should not pass preconditions")
 	})
 
 	t.Run("notIn blocks terminating cluster", func(t *testing.T) {
@@ -286,7 +374,7 @@ func TestTerminatingClusterScenario(t *testing.T) {
 			[]interface{}{"Terminating", "Failed"},
 		)
 		require.NoError(t, err)
-		assert.False(t, result, "terminating cluster should be blocked by notIn precondition")
+		assert.False(t, result.Matched, "terminating cluster should be blocked by notIn precondition")
 	})
 }
 
@@ -364,9 +452,9 @@ func TestNodeCountValidation(t *testing.T) {
 			require.NoError(t, err)
 
 			if tt.valid {
-				assert.True(t, result1 && result2, "node count should be within valid range")
+				assert.True(t, result1.Matched && result2.Matched, "node count should be within valid range")
 			} else {
-				assert.False(t, result1 && result2, "node count should be outside valid range")
+				assert.False(t, result1.Matched && result2.Matched, "node count should be outside valid range")
 			}
 		})
 	}

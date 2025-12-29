@@ -70,6 +70,7 @@ The loader validates:
 - File references exist (`buildRef`, `manifest.ref`)
 - CEL expressions are syntactically valid
 - K8s manifests have required fields
+- CaptureField has either `field` or `expression` (not both, not neither)
 
 Validation errors are descriptive:
 ```
@@ -88,6 +89,59 @@ spec.preconditions[1].apiCall.method must be one of: GET, POST, PUT, PATCH, DELE
 | `PostConfig` | Post-processing actions |
 | `APICall` | HTTP request configuration |
 | `Condition` | Field/operator/value condition |
+| `CaptureField` | Field capture from API response (see below) |
+| `ValueDef` | Dynamic value definition in payload builds (see below) |
+
+### CaptureField
+
+Captures values from API responses. Supports two modes (mutually exclusive):
+
+| Field | Description |
+|-------|-------------|
+| `name` | Variable name for captured value (required) |
+| `field` | Simple dot notation or JSONPath expression |
+| `expression` | CEL expression for computed values |
+
+```yaml
+capture:
+  # Simple dot notation
+  - name: "clusterPhase"
+    field: "status.phase"
+  
+  # JSONPath for complex extraction
+  - name: "lzStatus"
+    field: "{.items[?(@.adapter=='landing-zone-adapter')].data.namespace.status}"
+  
+  # CEL expression
+  - name: "activeCount"
+    expression: "items.filter(i, i.status == 'active').size()"
+```
+
+### ValueDef
+
+Dynamic value definition for payload builds. Used when a field should be computed via field extraction (JSONPath) or CEL expression.
+
+| Field | Description |
+|-------|-------------|
+| `field` | JSONPath/dot notation to extract value |
+| `expression` | CEL expression to evaluate |
+| `default` | Default value if extraction fails or returns nil |
+
+```yaml
+build:
+  # Direct string (Go template supported)
+  message: "Deployment successful"
+  
+  # Field extraction with default
+  errorMessage:
+    field: "adapter.errorMessage"
+    default: ""
+  
+  # CEL expression with default
+  isHealthy:
+    expression: "resources.deployment.status.readyReplicas > 0"
+    default: false
+```
 
 See `types.go` for complete definitions.
 

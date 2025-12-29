@@ -2,7 +2,6 @@ package criteria
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
@@ -36,7 +35,7 @@ func TestEvaluationContextSetGet(t *testing.T) {
 	assert.Nil(t, val)
 }
 
-func TestEvaluationContextGetNestedField(t *testing.T) {
+func TestEvaluationContextGetField(t *testing.T) {
 	ctx := NewEvaluationContext()
 	ctx.Set("cluster", map[string]interface{}{
 		"status": map[string]interface{}{
@@ -51,10 +50,10 @@ func TestEvaluationContextGetNestedField(t *testing.T) {
 	})
 
 	tests := []struct {
-		name      string
-		path      string
-		want      interface{}
-		wantError bool
+		name    string
+		path    string
+		want    interface{}
+		wantNil bool // field not found returns nil value
 	}{
 		{
 			name: "simple nested field",
@@ -67,25 +66,25 @@ func TestEvaluationContextGetNestedField(t *testing.T) {
 			want: "aws",
 		},
 		{
-			name:      "nonexistent field",
-			path:      "cluster.status.nonexistent",
-			wantError: true,
+			name:    "nonexistent field",
+			path:    "cluster.status.nonexistent",
+			wantNil: true,
 		},
 		{
-			name:      "nonexistent top level",
-			path:      "nonexistent.field",
-			wantError: true,
+			name:    "nonexistent top level",
+			path:    "nonexistent.field",
+			wantNil: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			val, err := ctx.GetNestedField(tt.path)
-			if tt.wantError {
-				assert.Error(t, err)
+			result, err := ctx.GetField(tt.path)
+			assert.NoError(t, err) // parse errors only
+			if tt.wantNil {
+				assert.Nil(t, result.Value)
 			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.want, val)
+				assert.Equal(t, tt.want, result.Value)
 			}
 		})
 	}
@@ -583,11 +582,11 @@ func TestEvaluatorEvaluateCondition(t *testing.T) {
 			want:     true,
 		},
 		{
-			name:      "nonexistent field",
-			field:     "nonexistent",
-			operator:  OperatorEquals,
-			value:     "test",
-			wantError: true,
+			name:     "nonexistent field - no error, just not matched",
+			field:    "nonexistent",
+			operator: OperatorEquals,
+			value:    "test",
+			want:     false, // nil != "test", so not matched
 		},
 	}
 
@@ -598,7 +597,7 @@ func TestEvaluatorEvaluateCondition(t *testing.T) {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.want, result)
+				assert.Equal(t, tt.want, result.Matched)
 			}
 		})
 	}
@@ -650,13 +649,13 @@ func TestEvaluatorEvaluateConditions(t *testing.T) {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.want, result)
+				assert.Equal(t, tt.want, result.Matched)
 			}
 		})
 	}
 }
 
-func TestGetNestedField(t *testing.T) {
+func TestExtractField(t *testing.T) {
 	data := map[string]interface{}{
 		"level1": map[string]interface{}{
 			"level2": map[string]interface{}{
@@ -707,15 +706,140 @@ func TestGetNestedField(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := getNestedField(data, tt.path)
+			result, err := ExtractField(data, tt.path)
 			if tt.wantError {
-				assert.Error(t, err)
+				// Error can be returned as err or captured in result.Error
+				hasError := err != nil || (result != nil && result.Error != nil)
+				assert.True(t, hasError, "expected error")
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.want, result)
+				assert.NotNil(t, result)
+				assert.NoError(t, result.Error)
+				assert.Equal(t, tt.want, result.Value)
 			}
 		})
 	}
+}
+
+func TestExtractFieldJSONPath(t *testing.T) {
+	data := map[string]interface{}{
+		"items": []interface{}{
+			map[string]interface{}{
+				"adapter": "landing-zone-adapter",
+				"data": map[string]interface{}{
+					"namespace": map[string]interface{}{
+						"status": "active",
+					},
+				},
+			},
+			map[string]interface{}{
+				"adapter": "other-adapter",
+				"data": map[string]interface{}{
+					"namespace": map[string]interface{}{
+						"status": "inactive",
+					},
+				},
+			},
+			map[string]interface{}{
+				"adapter": "landing-zone-adapter",
+				"data": map[string]interface{}{
+					"namespace": map[string]interface{}{
+						"status": "pending",
+					},
+				},
+			},
+		},
+		"metadata": map[string]interface{}{
+			"name": "test-resource",
+		},
+	}
+
+	tests := []struct {
+		name      string
+		path      string
+		want      interface{}
+		wantError bool
+	}{
+		{
+			name: "JSONPath get all adapters",
+			path: "{.items[*].adapter}",
+			want: []interface{}{"landing-zone-adapter", "other-adapter", "landing-zone-adapter"},
+		},
+		{
+			name: "JSONPath get first item adapter",
+			path: "{.items[0].adapter}",
+			want: "landing-zone-adapter",
+		},
+		{
+			name: "JSONPath filter by adapter",
+			path: "{.items[?(@.adapter=='landing-zone-adapter')].data.namespace.status}",
+			want: []interface{}{"active", "pending"},
+		},
+		{
+			name: "JSONPath filter single result",
+			path: "{.items[?(@.adapter=='other-adapter')].data.namespace.status}",
+			want: "inactive",
+		},
+		{
+			name: "JSONPath without braces - auto-wrapped",
+			path: ".items[0].adapter",
+			want: "landing-zone-adapter",
+		},
+		{
+			name: "JSONPath wildcard detected with dot prefix",
+			path: ".items[*].adapter",
+			want: []interface{}{"landing-zone-adapter", "other-adapter", "landing-zone-adapter"},
+		},
+		{
+			name: "Simple path still works",
+			path: "metadata.name",
+			want: "test-resource",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ExtractField(data, tt.path)
+			if tt.wantError {
+				// Error can be returned as err or captured in result.Error
+				hasError := err != nil || (result != nil && result.Error != nil)
+				assert.True(t, hasError, "expected error")
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, result)
+				assert.NoError(t, result.Error)
+				assert.Equal(t, tt.want, result.Value)
+			}
+		})
+	}
+}
+
+func TestExtractFieldFunction(t *testing.T) {
+	// Test the convenience ExtractField function
+	data := map[string]interface{}{
+		"items": []interface{}{
+			map[string]interface{}{"name": "a", "status": "ready"},
+			map[string]interface{}{"name": "b", "status": "pending"},
+		},
+	}
+
+	// Simple extraction
+	result, err := ExtractField(data, "items")
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, result.Value)
+
+	// JSONPath extraction
+	result, err = ExtractField(data, "{.items[?(@.status=='ready')].name}")
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "a", result.Value)
+
+	// All items with JSONPath
+	result, err = ExtractField(data, "{.items[*].name}")
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, []interface{}{"a", "b"}, result.Value)
 }
 
 func TestToFloat64(t *testing.T) {
@@ -790,7 +914,7 @@ func TestNewEvaluatorErrorsWithNilParams(t *testing.T) {
 	})
 }
 
-func TestGetField(t *testing.T) {
+func TestExtractValue(t *testing.T) {
 	ctx := NewEvaluationContext()
 	ctx.Set("cluster", map[string]interface{}{
 		"metadata": map[string]interface{}{
@@ -805,45 +929,22 @@ func TestGetField(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get existing field
-	value, err := evaluator.GetField("cluster.metadata.name")
+	result, err := evaluator.ExtractValue("cluster.metadata.name", "")
 	require.NoError(t, err)
-	assert.Equal(t, "test-cluster", value)
+	assert.Equal(t, "test-cluster", result.Value)
 
 	// Get nested field
-	value, err = evaluator.GetField("cluster.status.phase")
+	result, err = evaluator.ExtractValue("cluster.status.phase", "")
 	require.NoError(t, err)
-	assert.Equal(t, "Ready", value)
+	assert.Equal(t, "Ready", result.Value)
 
-	// Get non-existent field
-	_, err = evaluator.GetField("cluster.nonexistent")
-	assert.Error(t, err)
+	// Get non-existent field - returns nil value (not error)
+	result, err = evaluator.ExtractValue("cluster.nonexistent", "")
+	assert.NoError(t, err)      // No parse error
+	assert.Nil(t, result.Value) // Value is nil (field not found)
 }
 
-func TestGetFieldOrDefault(t *testing.T) {
-	ctx := NewEvaluationContext()
-	ctx.Set("cluster", map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"name": "test-cluster",
-		},
-	})
-
-	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
-	require.NoError(t, err)
-
-	// Get existing field
-	value := evaluator.GetFieldOrDefault("cluster.metadata.name", "default")
-	assert.Equal(t, "test-cluster", value)
-
-	// Get non-existent field returns default
-	value = evaluator.GetFieldOrDefault("cluster.nonexistent", "default-value")
-	assert.Equal(t, "default-value", value)
-
-	// Get deeply nested non-existent field returns default
-	value = evaluator.GetFieldOrDefault("cluster.a.b.c.d", 42)
-	assert.Equal(t, 42, value)
-}
-
-func TestEvaluateConditionWithResult(t *testing.T) {
+func TestEvaluateCondition(t *testing.T) {
 	ctx := NewEvaluationContext()
 	ctx.Set("status", "Ready")
 	ctx.Set("replicas", 3)
@@ -853,7 +954,7 @@ func TestEvaluateConditionWithResult(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test equals - matched
-	result, err := evaluator.EvaluateConditionWithResult("status", OperatorEquals, "Ready")
+	result, err := evaluator.EvaluateCondition("status", OperatorEquals, "Ready")
 	require.NoError(t, err)
 	assert.True(t, result.Matched)
 	assert.Equal(t, "Ready", result.FieldValue)
@@ -862,25 +963,25 @@ func TestEvaluateConditionWithResult(t *testing.T) {
 	assert.Equal(t, "Ready", result.ExpectedValue)
 
 	// Test equals - not matched
-	result, err = evaluator.EvaluateConditionWithResult("status", OperatorEquals, "Failed")
+	result, err = evaluator.EvaluateCondition("status", OperatorEquals, "Failed")
 	require.NoError(t, err)
 	assert.False(t, result.Matched)
 	assert.Equal(t, "Ready", result.FieldValue) // Still returns the actual value
 
 	// Test greaterThan
-	result, err = evaluator.EvaluateConditionWithResult("replicas", OperatorGreaterThan, 2)
+	result, err = evaluator.EvaluateCondition("replicas", OperatorGreaterThan, 2)
 	require.NoError(t, err)
 	assert.True(t, result.Matched)
 	assert.Equal(t, 3, result.FieldValue)
 
 	// Test in operator
-	result, err = evaluator.EvaluateConditionWithResult("provider", OperatorIn, []string{"aws", "gcp", "azure"})
+	result, err = evaluator.EvaluateCondition("provider", OperatorIn, []string{"aws", "gcp", "azure"})
 	require.NoError(t, err)
 	assert.True(t, result.Matched)
 	assert.Equal(t, "aws", result.FieldValue)
 }
 
-func TestEvaluateConditionsWithResult(t *testing.T) {
+func TestEvaluateConditions(t *testing.T) {
 	ctx := NewEvaluationContext()
 	ctx.Set("status", "Ready")
 	ctx.Set("replicas", 3)
@@ -896,7 +997,7 @@ func TestEvaluateConditionsWithResult(t *testing.T) {
 		{Field: "provider", Operator: "in", Value: []string{"aws", "gcp"}},
 	}
 
-	result, err := evaluator.EvaluateConditionsWithResult(conditions)
+	result, err := evaluator.EvaluateConditions(conditions)
 	require.NoError(t, err)
 	assert.True(t, result.Matched)
 	assert.Equal(t, -1, result.FailedCondition)
@@ -915,7 +1016,7 @@ func TestEvaluateConditionsWithResult(t *testing.T) {
 		{Field: "provider", Operator: "equals", Value: "aws"},
 	}
 
-	result, err = evaluator.EvaluateConditionsWithResult(conditions)
+	result, err = evaluator.EvaluateConditions(conditions)
 	require.NoError(t, err)
 	assert.False(t, result.Matched)
 	assert.Equal(t, 1, result.FailedCondition) // Second condition (index 1) failed
@@ -924,86 +1025,6 @@ func TestEvaluateConditionsWithResult(t *testing.T) {
 	// Extracted fields are still populated even when conditions fail
 	assert.Equal(t, "Ready", result.ExtractedFields["status"])
 	assert.Equal(t, 3, result.ExtractedFields["replicas"])
-}
-
-func TestExtractFields(t *testing.T) {
-	ctx := NewEvaluationContext()
-	ctx.Set("cluster", map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"name":      "test-cluster",
-			"namespace": "default",
-		},
-		"status": map[string]interface{}{
-			"phase": "Ready",
-		},
-	})
-
-	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
-	require.NoError(t, err)
-	// Extract multiple fields
-	fields := []string{"cluster.metadata.name", "cluster.metadata.namespace", "cluster.status.phase"}
-	extracted, err := evaluator.ExtractFields(fields)
-	require.NoError(t, err)
-	assert.Len(t, extracted, 3)
-	assert.Equal(t, "test-cluster", extracted["cluster.metadata.name"])
-	assert.Equal(t, "default", extracted["cluster.metadata.namespace"])
-	assert.Equal(t, "Ready", extracted["cluster.status.phase"])
-
-	// Error on non-existent field
-	fields = []string{"cluster.metadata.name", "cluster.nonexistent"}
-	_, err = evaluator.ExtractFields(fields)
-	assert.Error(t, err)
-}
-
-func TestExtractFieldsSafe(t *testing.T) {
-	ctx := NewEvaluationContext()
-	ctx.Set("cluster", map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"name": "test-cluster",
-		},
-		"status": nil, // null value
-	})
-
-	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
-	require.NoError(t, err)
-
-	fields := []string{
-		"cluster.metadata.name", // exists
-		"cluster.nonexistent",   // missing key
-		"cluster.status.phase",  // null parent
-		"missing.field",         // missing root
-	}
-
-	extracted := evaluator.ExtractFieldsSafe(fields)
-	assert.Len(t, extracted, 4)
-	assert.Equal(t, "test-cluster", extracted["cluster.metadata.name"]) // Actual value
-	assert.Nil(t, extracted["cluster.nonexistent"])                     // Missing key -> nil
-	assert.Nil(t, extracted["cluster.status.phase"])                    // Null parent -> nil
-	assert.Nil(t, extracted["missing.field"])                           // Missing root -> nil
-}
-
-func TestExtractFieldsOrDefault(t *testing.T) {
-	ctx := NewEvaluationContext()
-	ctx.Set("cluster", map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"name": "test-cluster",
-		},
-	})
-
-	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
-	require.NoError(t, err)
-
-	fields := map[string]interface{}{
-		"cluster.metadata.name": "default-name",
-		"cluster.nonexistent":   "fallback-value",
-		"missing.field":         42,
-	}
-
-	extracted := evaluator.ExtractFieldsOrDefault(fields)
-	assert.Len(t, extracted, 3)
-	assert.Equal(t, "test-cluster", extracted["cluster.metadata.name"]) // Actual value
-	assert.Equal(t, "fallback-value", extracted["cluster.nonexistent"]) // Default
-	assert.Equal(t, 42, extracted["missing.field"])                     // Default
 }
 
 func TestEvaluationResultStruct(t *testing.T) {
@@ -1040,47 +1061,23 @@ func TestNullHandling(t *testing.T) {
 	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
 	require.NoError(t, err)
 
-	t.Run("access field on null parent", func(t *testing.T) {
-		// Accessing cluster.status.phase when status is null
-		_, err := evaluator.GetField("cluster.status.phase")
-		assert.Error(t, err)
-		assert.True(t, IsFieldNotFound(err))
+	t.Run("access field on null parent returns nil value", func(t *testing.T) {
+		// Accessing cluster.status.phase when status is null - returns nil value (not error)
+		result, err := evaluator.ExtractValue("cluster.status.phase", "")
+		assert.NoError(t, err)      // No parse error
+		assert.Nil(t, result.Value) // Value is nil (field not found)
 	})
 
-	t.Run("safe get on null path returns nil", func(t *testing.T) {
-		value := evaluator.GetFieldSafe("cluster.status.phase")
-		assert.Nil(t, value)
-	})
-
-	t.Run("get with default on null path", func(t *testing.T) {
-		value := evaluator.GetFieldOrDefault("cluster.status.phase", "Unknown")
-		assert.Equal(t, "Unknown", value)
-	})
-
-	t.Run("has field returns false for null", func(t *testing.T) {
-		assert.False(t, evaluator.HasField("cluster.status"))
-		assert.False(t, evaluator.HasField("cluster.status.phase"))
-		assert.False(t, evaluator.HasField("cluster.spec.provider"))
-	})
-
-	t.Run("has field returns true for existing", func(t *testing.T) {
-		assert.True(t, evaluator.HasField("cluster.metadata.name"))
-		assert.True(t, evaluator.HasField("cluster.spec.nested.value"))
-	})
-
-	t.Run("safe evaluate returns false for null path", func(t *testing.T) {
-		result := evaluator.EvaluateConditionSafe("cluster.status.phase", OperatorEquals, "Ready")
-		assert.False(t, result)
-	})
-
-	t.Run("exists operator on null returns false", func(t *testing.T) {
-		result := evaluator.EvaluateConditionSafe("cluster.status", OperatorExists, true)
-		assert.False(t, result)
+	t.Run("exists operator on null returns error or false", func(t *testing.T) {
+		result, err := evaluator.EvaluateCondition("cluster.status", OperatorExists, true)
+		// Either error or not matched
+		assert.True(t, err != nil || !result.Matched)
 	})
 
 	t.Run("existing field still works", func(t *testing.T) {
-		result := evaluator.EvaluateConditionSafe("cluster.metadata.name", OperatorEquals, "test-cluster")
-		assert.True(t, result)
+		result, err := evaluator.EvaluateCondition("cluster.metadata.name", OperatorEquals, "test-cluster")
+		assert.NoError(t, err)
+		assert.True(t, result.Matched)
 	})
 }
 
@@ -1095,33 +1092,13 @@ func TestDeepNullPath(t *testing.T) {
 	evaluator, err := NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
 	require.NoError(t, err)
 
-	// a.b.c is null, so a.b.c.d.e.f should fail gracefully
-	_, err = evaluator.GetField("a.b.c.d.e.f")
-	assert.Error(t, err)
-	assert.True(t, IsFieldNotFound(err))
+	// a.b.c is null, so a.b.c.d.e.f should return nil value (not error)
+	result, err := evaluator.ExtractValue("a.b.c.d.e.f", "")
+	assert.NoError(t, err)      // No parse error
+	assert.Nil(t, result.Value) // Value is nil (field not found)
 
-	// Safe version returns nil
-	value := evaluator.GetFieldSafe("a.b.c.d.e.f")
-	assert.Nil(t, value)
-
-	// Default version returns default
-	value = evaluator.GetFieldOrDefault("a.b.c.d.e.f", "fallback")
-	assert.Equal(t, "fallback", value)
-
-	// HasField returns false
-	assert.False(t, evaluator.HasField("a.b.c.d.e.f"))
-	assert.False(t, evaluator.HasField("a.b.c"))
-	assert.True(t, evaluator.HasField("a.b"))
-}
-
-func TestFieldNotFoundError(t *testing.T) {
-	err := &FieldNotFoundError{
-		Path:    "cluster.status.phase",
-		Field:   "phase",
-		Message: "field 'phase' not found at path 'cluster.status.phase'",
-	}
-
-	assert.Equal(t, "field 'phase' not found at path 'cluster.status.phase'", err.Error())
-	assert.True(t, IsFieldNotFound(err))
-	assert.False(t, IsFieldNotFound(fmt.Errorf("some other error")))
+	// a.b exists and is not null
+	result, err = evaluator.ExtractValue("a.b", "")
+	assert.NoError(t, err)
+	assert.NotNil(t, result.Value)
 }

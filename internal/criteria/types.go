@@ -112,12 +112,12 @@ func (c *EvaluationContext) Get(key string) (interface{}, bool) {
 	return val, ok
 }
 
-// GetNestedField retrieves a nested field using dot notation (e.g., "status.phase").
+// GetField retrieves a field using dot notation or JSONPath (e.g., "status.phase").
 // This method is safe for concurrent use.
-func (c *EvaluationContext) GetNestedField(path string) (interface{}, error) {
+func (c *EvaluationContext) GetField(path string) (*FieldResult, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return getNestedField(c.data, path)
+	return ExtractField(c.data, path)
 }
 
 // Merge merges another context into this one.

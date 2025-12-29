@@ -23,7 +23,7 @@ func TestContextVersionTracking(t *testing.T) {
 	require.NoError(t, err1)
 	require.NotNil(t, result1)
 	assert.True(t, result1.Matched)
-	assert.True(t, result1.IsSuccess())
+	assert.False(t, result1.HasError())
 
 	// Add new variable AFTER first evaluation
 	ctx.Set("replicas", 3)
@@ -34,14 +34,14 @@ func TestContextVersionTracking(t *testing.T) {
 	require.NoError(t, err2)
 	require.NotNil(t, result2)
 	assert.True(t, result2.Matched)
-	assert.True(t, result2.IsSuccess(), "Should recreate CEL env and recognize new variable")
+	assert.False(t, result2.HasError(), "Should recreate CEL env and recognize new variable")
 
 	// Verify both old and new variables work
 	result3, err3 := evaluator.EvaluateCEL("status == 'Ready' && replicas == 3")
 	require.NoError(t, err3)
 	require.NotNil(t, result3)
 	assert.True(t, result3.Matched)
-	assert.True(t, result3.IsSuccess())
+	assert.False(t, result3.HasError())
 }
 
 // TestSetVariablesFromMapVersionTracking verifies version tracking with SetVariablesFromMap
@@ -71,7 +71,7 @@ func TestSetVariablesFromMapVersionTracking(t *testing.T) {
 	require.NoError(t, err2)
 	require.NotNil(t, result2)
 	assert.True(t, result2.Matched)
-	assert.True(t, result2.IsSuccess(), "Should recognize variables added via SetVariablesFromMap")
+	assert.False(t, result2.HasError(), "Should recognize variables added via SetVariablesFromMap")
 }
 
 // TestMergeVersionTracking verifies version tracking with Merge
@@ -99,7 +99,7 @@ func TestMergeVersionTracking(t *testing.T) {
 	require.NoError(t, err2)
 	require.NotNil(t, result2)
 	assert.True(t, result2.Matched)
-	assert.True(t, result2.IsSuccess(), "Should recognize variables from merged context")
+	assert.False(t, result2.HasError(), "Should recognize variables from merged context")
 }
 
 // TestVersionIncrements verifies that version increments correctly

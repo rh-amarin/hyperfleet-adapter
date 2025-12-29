@@ -8,750 +8,266 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// baseConfig returns a minimal valid AdapterConfig for testing.
+// Tests can modify the returned config to set up specific scenarios.
+func baseConfig() *AdapterConfig {
+	return &AdapterConfig{
+		APIVersion: "hyperfleet.redhat.com/v1alpha1",
+		Kind:       "AdapterConfig",
+		Metadata:   Metadata{Name: "test-adapter"},
+		Spec: AdapterConfigSpec{
+			Adapter:       AdapterInfo{Version: "1.0.0"},
+			HyperfleetAPI: HyperfleetAPIConfig{BaseURL: "https://test.example.com", Timeout: "5s"},
+			Kubernetes:    KubernetesConfig{APIVersion: "v1"},
+		},
+	}
+}
+
 func TestValidateConditionOperators(t *testing.T) {
-	tests := []struct {
-		name      string
-		yaml      string
-		wantError bool
-		errorMsg  string
-	}{
-		{
-			name: "valid operators",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkStatus"
-      conditions:
-        - field: "status"
-          operator: "equals"
-          value: "Ready"
-        - field: "provider"
-          operator: "in"
-          value: ["aws", "gcp"]
-        - field: "vpcId"
-          operator: "exists"
-`,
-			wantError: false,
-		},
-		{
-			name: "invalid operator",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkStatus"
-      conditions:
-        - field: "status"
-          operator: "invalidOp"
-          value: "Ready"
-`,
-			wantError: true,
-			errorMsg:  "invalid operator",
-		},
-		{
-			name: "missing operator",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkStatus"
-      conditions:
-        - field: "status"
-          value: "Ready"
-`,
-			wantError: true,
-			errorMsg:  "operator is required",
-		},
-		{
-			name: "missing value for equals operator",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkStatus"
-      conditions:
-        - field: "status"
-          operator: "equals"
-`,
-			wantError: true,
-			errorMsg:  "value is required for operator \"equals\"",
-		},
-		{
-			name: "missing value for in operator",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkStatus"
-      conditions:
-        - field: "provider"
-          operator: "in"
-`,
-			wantError: true,
-			errorMsg:  "value is required for operator \"in\"",
-		},
-		{
-			name: "non-list value for in operator",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkStatus"
-      conditions:
-        - field: "provider"
-          operator: "in"
-          value: "aws"
-`,
-			wantError: true,
-			errorMsg:  "value must be a list for operator \"in\"",
-		},
-		{
-			name: "non-list value for notIn operator",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkStatus"
-      conditions:
-        - field: "provider"
-          operator: "notIn"
-          value: "aws"
-`,
-			wantError: true,
-			errorMsg:  "value must be a list for operator \"notIn\"",
-		},
-		{
-			name: "exists operator without value is valid",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkStatus"
-      conditions:
-        - field: "vpcId"
-          operator: "exists"
-`,
-			wantError: false,
-		},
-		{
-			name: "missing value for greaterThan operator",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkCount"
-      conditions:
-        - field: "count"
-          operator: "greaterThan"
-`,
-			wantError: true,
-			errorMsg:  "value is required for operator \"greaterThan\"",
-		},
+	// Helper to create config with a single condition
+	withCondition := func(cond Condition) *AdapterConfig {
+		cfg := baseConfig()
+		cfg.Spec.Preconditions = []Precondition{{
+			Name:       "checkStatus",
+			Conditions: []Condition{cond},
+		}}
+		return cfg
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config, err := Parse([]byte(tt.yaml))
-			if tt.wantError {
-				assert.Error(t, err)
-				if tt.errorMsg != "" {
-					assert.Contains(t, err.Error(), tt.errorMsg)
-				}
-			} else {
-				assert.NoError(t, err)
-				assert.NotNil(t, config)
-			}
-		})
-	}
+	t.Run("valid operators", func(t *testing.T) {
+		cfg := baseConfig()
+		cfg.Spec.Preconditions = []Precondition{{
+			Name: "checkStatus",
+			Conditions: []Condition{
+				{Field: "status", Operator: "equals", Value: "Ready"},
+				{Field: "provider", Operator: "in", Value: []interface{}{"aws", "gcp"}},
+				{Field: "vpcId", Operator: "exists"},
+			},
+		}}
+		assert.NoError(t, newValidator(cfg).Validate())
+	})
+
+	t.Run("invalid operator", func(t *testing.T) {
+		cfg := withCondition(Condition{Field: "status", Operator: "invalidOp", Value: "Ready"})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid operator")
+	})
+
+	t.Run("missing operator", func(t *testing.T) {
+		cfg := withCondition(Condition{Field: "status", Value: "Ready"})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "operator is required")
+	})
+
+	t.Run("missing value for equals operator", func(t *testing.T) {
+		cfg := withCondition(Condition{Field: "status", Operator: "equals"})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "value is required for operator \"equals\"")
+	})
+
+	t.Run("missing value for in operator", func(t *testing.T) {
+		cfg := withCondition(Condition{Field: "provider", Operator: "in"})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "value is required for operator \"in\"")
+	})
+
+	t.Run("non-list value for in operator", func(t *testing.T) {
+		cfg := withCondition(Condition{Field: "provider", Operator: "in", Value: "aws"})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "value must be a list for operator \"in\"")
+	})
+
+	t.Run("non-list value for notIn operator", func(t *testing.T) {
+		cfg := withCondition(Condition{Field: "provider", Operator: "notIn", Value: "aws"})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "value must be a list for operator \"notIn\"")
+	})
+
+	t.Run("exists operator without value is valid", func(t *testing.T) {
+		cfg := withCondition(Condition{Field: "vpcId", Operator: "exists"})
+		assert.NoError(t, newValidator(cfg).Validate())
+	})
+
+	t.Run("missing value for greaterThan operator", func(t *testing.T) {
+		cfg := withCondition(Condition{Field: "count", Operator: "greaterThan"})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "value is required for operator \"greaterThan\"")
+	})
 }
 
 func TestValidateTemplateVariables(t *testing.T) {
-	tests := []struct {
-		name      string
-		yaml      string
-		wantError bool
-		errorMsg  string
-	}{
-		{
-			name: "defined variables",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-    - name: "apiUrl"
-      source: "env.API_URL"
-  preconditions:
-    - name: "checkCluster"
-      apiCall:
-        method: "GET"
-        url: "{{ .apiUrl }}/clusters/{{ .clusterId }}"
-`,
-			wantError: false,
-		},
-		{
-			name: "undefined variable in URL",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkCluster"
-      apiCall:
-        method: "GET"
-        url: "{{ .undefinedVar }}/clusters/{{ .clusterId }}"
-`,
-			wantError: true,
-			errorMsg:  "undefined template variable \"undefinedVar\"",
-		},
-		{
-			name: "undefined variable in resource manifest",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  resources:
-    - name: "testNs"
-      manifest:
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: "ns-{{ .undefinedVar }}"
-      discovery:
-        namespace: "*"
-        byName: "ns-{{ .clusterId }}"
-`,
-			wantError: true,
-			errorMsg:  "undefined template variable \"undefinedVar\"",
-		},
-		{
-			name: "nested variable access from stored response",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "apiUrl"
-      source: "env.API_URL"
-  preconditions:
-    - name: "getCluster"
-      apiCall:
-        method: "GET"
-        url: "{{ .apiUrl }}/clusters"
-      capture:
-        - name: "clusterName"
-          field: "metadata.name"
-  resources:
-    - name: "testNs"
-      manifest:
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: "ns-{{ .clusterName }}"
-      discovery:
-        namespace: "*"
-        byName: "ns-{{ .clusterName }}"
-`,
-			wantError: false,
-		},
-	}
+	t.Run("defined variables", func(t *testing.T) {
+		cfg := baseConfig()
+		cfg.Spec.Params = []Parameter{
+			{Name: "clusterId", Source: "event.cluster_id"},
+			{Name: "apiUrl", Source: "env.API_URL"},
+		}
+		cfg.Spec.Preconditions = []Precondition{{
+			Name:    "checkCluster",
+			APICall: &APICall{Method: "GET", URL: "{{ .apiUrl }}/clusters/{{ .clusterId }}"},
+		}}
+		assert.NoError(t, newValidator(cfg).Validate())
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config, err := Parse([]byte(tt.yaml))
-			if tt.wantError {
-				assert.Error(t, err)
-				if tt.errorMsg != "" {
-					assert.Contains(t, err.Error(), tt.errorMsg)
-				}
-			} else {
-				assert.NoError(t, err)
-				assert.NotNil(t, config)
-			}
-		})
-	}
+	t.Run("undefined variable in URL", func(t *testing.T) {
+		cfg := baseConfig()
+		cfg.Spec.Params = []Parameter{{Name: "clusterId", Source: "event.cluster_id"}}
+		cfg.Spec.Preconditions = []Precondition{{
+			Name:    "checkCluster",
+			APICall: &APICall{Method: "GET", URL: "{{ .undefinedVar }}/clusters/{{ .clusterId }}"},
+		}}
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "undefined template variable \"undefinedVar\"")
+	})
+
+	t.Run("undefined variable in resource manifest", func(t *testing.T) {
+		cfg := baseConfig()
+		cfg.Spec.Params = []Parameter{{Name: "clusterId", Source: "event.cluster_id"}}
+		cfg.Spec.Resources = []Resource{{
+			Name: "testNs",
+			Manifest: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Namespace",
+				"metadata":   map[string]interface{}{"name": "ns-{{ .undefinedVar }}"},
+			},
+			Discovery: &DiscoveryConfig{Namespace: "*", ByName: "ns-{{ .clusterId }}"},
+		}}
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "undefined template variable \"undefinedVar\"")
+	})
+
+	t.Run("captured variable is available for resources", func(t *testing.T) {
+		cfg := baseConfig()
+		cfg.Spec.Params = []Parameter{{Name: "apiUrl", Source: "env.API_URL"}}
+		cfg.Spec.Preconditions = []Precondition{{
+			Name:    "getCluster",
+			APICall: &APICall{Method: "GET", URL: "{{ .apiUrl }}/clusters"},
+			Capture: []CaptureField{{Name: "clusterName", Field: "metadata.name"}},
+		}}
+		cfg.Spec.Resources = []Resource{{
+			Name: "testNs",
+			Manifest: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Namespace",
+				"metadata":   map[string]interface{}{"name": "ns-{{ .clusterName }}"},
+			},
+			Discovery: &DiscoveryConfig{Namespace: "*", ByName: "ns-{{ .clusterName }}"},
+		}}
+		assert.NoError(t, newValidator(cfg).Validate())
+	})
 }
 
 func TestValidateCELExpressions(t *testing.T) {
-	tests := []struct {
-		name      string
-		yaml      string
-		wantError bool
-		errorMsg  string
-	}{
-		{
-			name: "valid CEL expression",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkPhase"
-      expression: |
-        clusterPhase == "Ready" || clusterPhase == "Provisioning"
-`,
-			wantError: false,
-		},
-		{
-			name: "invalid CEL expression - syntax error",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkPhase"
-      expression: |
-        clusterPhase ==== "Ready"
-`,
-			wantError: true,
-			errorMsg:  "CEL parse error",
-		},
-		{
-			name: "valid CEL with has() function",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "checkField"
-      expression: |
-        has(cluster.status) && cluster.status.phase == "Ready"
-`,
-			wantError: false,
-		},
+	// Helper to create config with a CEL expression precondition
+	withExpression := func(expr string) *AdapterConfig {
+		cfg := baseConfig()
+		cfg.Spec.Preconditions = []Precondition{{Name: "check", Expression: expr}}
+		return cfg
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config, err := Parse([]byte(tt.yaml))
-			if tt.wantError {
-				assert.Error(t, err)
-				if tt.errorMsg != "" {
-					assert.Contains(t, err.Error(), tt.errorMsg)
-				}
-			} else {
-				assert.NoError(t, err)
-				assert.NotNil(t, config)
-			}
-		})
-	}
+	t.Run("valid CEL expression", func(t *testing.T) {
+		cfg := withExpression(`clusterPhase == "Ready" || clusterPhase == "Provisioning"`)
+		assert.NoError(t, newValidator(cfg).Validate())
+	})
+
+	t.Run("invalid CEL expression - syntax error", func(t *testing.T) {
+		cfg := withExpression(`clusterPhase ==== "Ready"`)
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "CEL parse error")
+	})
+
+	t.Run("valid CEL with has() function", func(t *testing.T) {
+		cfg := withExpression(`has(cluster.status) && cluster.status.phase == "Ready"`)
+		assert.NoError(t, newValidator(cfg).Validate())
+	})
 }
 
 func TestValidateK8sManifests(t *testing.T) {
-	tests := []struct {
-		name      string
-		yaml      string
-		wantError bool
-		errorMsg  string
-	}{
-		{
-			name: "valid K8s manifest",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  resources:
-    - name: "testNs"
-      manifest:
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: "test-namespace"
-          labels:
-            app: test
-      discovery:
-        namespace: "*"
-        byName: "test-namespace"
-`,
-			wantError: false,
-		},
-		{
-			name: "missing apiVersion in manifest",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  resources:
-    - name: "testNs"
-      manifest:
-        kind: Namespace
-        metadata:
-          name: "test-namespace"
-      discovery:
-        namespace: "*"
-        byName: "test-namespace"
-`,
-			wantError: true,
-			errorMsg:  "missing required Kubernetes field \"apiVersion\"",
-		},
-		{
-			name: "missing kind in manifest",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  resources:
-    - name: "testNs"
-      manifest:
-        apiVersion: v1
-        metadata:
-          name: "test-namespace"
-      discovery:
-        namespace: "*"
-        byName: "test-namespace"
-`,
-			wantError: true,
-			errorMsg:  "missing required Kubernetes field \"kind\"",
-		},
-		{
-			name: "missing metadata in manifest",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  resources:
-    - name: "testNs"
-      manifest:
-        apiVersion: v1
-        kind: Namespace
-      discovery:
-        namespace: "*"
-        byName: "test-namespace"
-`,
-			wantError: true,
-			errorMsg:  "missing required Kubernetes field \"metadata\"",
-		},
-		{
-			name: "missing name in metadata",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  resources:
-    - name: "testNs"
-      manifest:
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          labels:
-            app: test
-      discovery:
-        namespace: "*"
-        byName: "test-namespace"
-`,
-			wantError: true,
-			errorMsg:  "missing required field \"name\"",
-		},
-		{
-			name: "valid manifest ref",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  resources:
-    - name: "testDeployment"
-      manifest:
-        ref: "templates/deployment.yaml"
-      discovery:
-        namespace: "*"
-        byName: "test-deployment"
-`,
-			wantError: false,
-		},
-		{
-			name: "empty manifest ref",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  resources:
-    - name: "testDeployment"
-      manifest:
-        ref: ""
-      discovery:
-        namespace: "*"
-        byName: "test-deployment"
-`,
-			wantError: true,
-			errorMsg:  "manifest ref cannot be empty",
-		},
+	// Helper to create config with a resource manifest
+	withResource := func(manifest map[string]interface{}) *AdapterConfig {
+		cfg := baseConfig()
+		cfg.Spec.Resources = []Resource{{
+			Name:      "testResource",
+			Manifest:  manifest,
+			Discovery: &DiscoveryConfig{Namespace: "*", ByName: "test"},
+		}}
+		return cfg
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config, err := Parse([]byte(tt.yaml))
-			if tt.wantError {
-				assert.Error(t, err)
-				if tt.errorMsg != "" {
-					assert.Contains(t, err.Error(), tt.errorMsg)
-				}
-			} else {
-				assert.NoError(t, err)
-				assert.NotNil(t, config)
-			}
-		})
+	// Complete valid manifest
+	validManifest := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Namespace",
+		"metadata":   map[string]interface{}{"name": "test-namespace", "labels": map[string]interface{}{"app": "test"}},
 	}
+
+	t.Run("valid K8s manifest", func(t *testing.T) {
+		cfg := withResource(validManifest)
+		assert.NoError(t, newValidator(cfg).Validate())
+	})
+
+	t.Run("missing apiVersion in manifest", func(t *testing.T) {
+		cfg := withResource(map[string]interface{}{
+			"kind":     "Namespace",
+			"metadata": map[string]interface{}{"name": "test"},
+		})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "missing required Kubernetes field \"apiVersion\"")
+	})
+
+	t.Run("missing kind in manifest", func(t *testing.T) {
+		cfg := withResource(map[string]interface{}{
+			"apiVersion": "v1",
+			"metadata":   map[string]interface{}{"name": "test"},
+		})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "missing required Kubernetes field \"kind\"")
+	})
+
+	t.Run("missing metadata in manifest", func(t *testing.T) {
+		cfg := withResource(map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Namespace",
+		})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "missing required Kubernetes field \"metadata\"")
+	})
+
+	t.Run("missing name in metadata", func(t *testing.T) {
+		cfg := withResource(map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Namespace",
+			"metadata":   map[string]interface{}{"labels": map[string]interface{}{"app": "test"}},
+		})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "missing required field \"name\"")
+	})
+
+	t.Run("valid manifest ref", func(t *testing.T) {
+		cfg := withResource(map[string]interface{}{"ref": "templates/deployment.yaml"})
+		assert.NoError(t, newValidator(cfg).Validate())
+	})
+
+	t.Run("empty manifest ref", func(t *testing.T) {
+		cfg := withResource(map[string]interface{}{"ref": ""})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "manifest ref cannot be empty")
+	})
 }
 
 func TestValidateManifestItems(t *testing.T) {
@@ -858,80 +374,41 @@ func TestValidationErrorsFormat(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	// Test that Validate catches multiple errors
-	yaml := `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  params:
-    - name: "clusterId"
-      source: "event.cluster_id"
-  preconditions:
-    - name: "check1"
-      conditions:
-        - field: "status"
-          operator: "badOperator"
-          value: "Ready"
-    - name: "check2"
-      expression: |
-        invalid ))) syntax
-  resources:
-    - name: "testNs"
-      manifest:
-        kind: Namespace
-        metadata:
-          name: "test"
-      discovery:
-        namespace: "*"
-        byName: "test"
-`
-	config, err := Parse([]byte(yaml))
-	require.Error(t, err)
-	require.Nil(t, config)
+	cfg := baseConfig()
+	cfg.Spec.Preconditions = []Precondition{
+		{Name: "check1", Conditions: []Condition{{Field: "status", Operator: "badOperator", Value: "Ready"}}},
+		{Name: "check2", Expression: "invalid ))) syntax"},
+	}
+	cfg.Spec.Resources = []Resource{{
+		Name: "testNs",
+		Manifest: map[string]interface{}{
+			"kind":     "Namespace", // missing apiVersion
+			"metadata": map[string]interface{}{"name": "test"},
+		},
+		Discovery: &DiscoveryConfig{Namespace: "*", ByName: "test"},
+	}}
 
-	// Should contain multiple validation errors
+	err := newValidator(cfg).Validate()
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "validation failed")
 }
 
 func TestBuiltinVariables(t *testing.T) {
-	// Test that builtin variables are recognized
-	yaml := `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  resources:
-    - name: "testNs"
-      manifest:
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: "ns-{{ .metadata.name }}"
-          labels:
-            adapter: "{{ .metadata.name }}"
-      discovery:
-        namespace: "*"
-        byName: "ns-{{ .metadata.name }}"
-`
-	config, err := Parse([]byte(yaml))
-	require.NoError(t, err)
-	require.NotNil(t, config)
+	// Test that builtin variables (like metadata.name) are recognized
+	cfg := baseConfig()
+	cfg.Spec.Resources = []Resource{{
+		Name: "testNs",
+		Manifest: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Namespace",
+			"metadata": map[string]interface{}{
+				"name":   "ns-{{ .metadata.name }}",
+				"labels": map[string]interface{}{"adapter": "{{ .metadata.name }}"},
+			},
+		},
+		Discovery: &DiscoveryConfig{Namespace: "*", ByName: "ns-{{ .metadata.name }}"},
+	}}
+	assert.NoError(t, newValidator(cfg).Validate())
 }
 
 func TestPayloadValidate(t *testing.T) {
@@ -991,15 +468,10 @@ func TestPayloadValidate(t *testing.T) {
 }
 
 func TestValidatePayloads(t *testing.T) {
-	tests := []struct {
-		name      string
-		yaml      string
-		wantError bool
-		errorMsg  string
-	}{
-		{
-			name: "valid payload with inline build",
-			yaml: `
+	// Payload validation runs via SchemaValidator during Parse(), so we use Parse() here.
+	// Helper builds minimal YAML with just the payload section varying.
+	parseWithPayloads := func(payloadsYAML string) (*AdapterConfig, error) {
+		yaml := `
 apiVersion: hyperfleet.redhat.com/v1alpha1
 kind: AdapterConfig
 metadata:
@@ -1008,151 +480,100 @@ spec:
   adapter:
     version: "1.0.0"
   hyperfleetApi:
-    baseUrl: "https://test.example.com"
     timeout: 5s
   kubernetes:
     apiVersion: "v1"
   post:
     payloads:
-      - name: "statusPayload"
+` + payloadsYAML
+		return Parse([]byte(yaml))
+	}
+
+	t.Run("valid payload with inline build", func(t *testing.T) {
+		_, err := parseWithPayloads(`      - name: "statusPayload"
+        build:
+          status: "ready"`)
+		assert.NoError(t, err)
+	})
+
+	t.Run("invalid - both build and buildRef specified", func(t *testing.T) {
+		_, err := parseWithPayloads(`      - name: "statusPayload"
         build:
           status: "ready"
-          message: "completed"
-`,
-			wantError: false,
-		},
-		{
-			name: "invalid - both build and buildRef specified",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  post:
-    payloads:
-      - name: "statusPayload"
-        build:
-          status: "ready"
-        buildRef: "templates/payload.yaml"
-`,
-			wantError: true,
-			errorMsg:  "build and buildRef are mutually exclusive",
-		},
-		{
-			name: "invalid - neither build nor buildRef specified",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  post:
-    payloads:
-      - name: "statusPayload"
-`,
-			wantError: true,
-			errorMsg:  "either build or buildRef must be set",
-		},
-		{
-			name: "invalid - payload name missing",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  post:
-    payloads:
-      - build:
-          status: "ready"
-`,
-			wantError: true,
-			errorMsg:  "name is required",
-		},
-		{
-			name: "error message includes payload context",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  post:
-    payloads:
-      - name: "myPayload"
-`,
-			wantError: true,
-			errorMsg:  "myPayload",
-		},
-		{
-			name: "multiple payloads - second one invalid",
-			yaml: `
-apiVersion: hyperfleet.redhat.com/v1alpha1
-kind: AdapterConfig
-metadata:
-  name: test-adapter
-spec:
-  adapter:
-    version: "1.0.0"
-  hyperfleetApi:
-    baseUrl: "https://test.example.com"
-    timeout: 5s
-  kubernetes:
-    apiVersion: "v1"
-  post:
-    payloads:
-      - name: "payload1"
+        buildRef: "templates/payload.yaml"`)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "build and buildRef are mutually exclusive")
+	})
+
+	t.Run("invalid - neither build nor buildRef specified", func(t *testing.T) {
+		_, err := parseWithPayloads(`      - name: "statusPayload"`)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "either build or buildRef must be set")
+	})
+
+	t.Run("invalid - payload name missing", func(t *testing.T) {
+		_, err := parseWithPayloads(`      - build:
+          status: "ready"`)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "name is required")
+	})
+
+	t.Run("multiple payloads - second one invalid", func(t *testing.T) {
+		_, err := parseWithPayloads(`      - name: "payload1"
         build:
           status: "ok"
       - name: "payload2"
         build:
           data: "test"
-        buildRef: "templates/conflict.yaml"
-`,
-			wantError: true,
-			errorMsg:  "payload2",
-		},
+        buildRef: "templates/conflict.yaml"`)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "payload2")
+	})
+}
+
+func TestValidateCaptureFields(t *testing.T) {
+	// Helper to create config with capture fields
+	withCapture := func(captures []CaptureField) *AdapterConfig {
+		cfg := baseConfig()
+		cfg.Spec.Preconditions = []Precondition{{
+			Name:    "getStatus",
+			APICall: &APICall{Method: "GET", URL: "http://example.com/api"},
+			Capture: captures,
+		}}
+		return cfg
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config, err := Parse([]byte(tt.yaml))
-			if tt.wantError {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorMsg)
-			} else {
-				assert.NoError(t, err)
-				assert.NotNil(t, config)
-			}
+	t.Run("valid capture with field only", func(t *testing.T) {
+		cfg := withCapture([]CaptureField{
+			{Name: "clusterName", Field: "metadata.name"},
+			{Name: "clusterPhase", Field: "status.phase"},
 		})
-	}
+		assert.NoError(t, newValidator(cfg).Validate())
+	})
+
+	t.Run("valid capture with expression only", func(t *testing.T) {
+		cfg := withCapture([]CaptureField{{Name: "activeCount", Expression: "1 + 1"}})
+		assert.NoError(t, newValidator(cfg).Validate())
+	})
+
+	t.Run("invalid - both field and expression set", func(t *testing.T) {
+		cfg := withCapture([]CaptureField{{Name: "conflicting", Field: "metadata.name", Expression: "1 + 1"}})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot have both 'field' and 'expression' set")
+	})
+
+	t.Run("invalid - neither field nor expression set", func(t *testing.T) {
+		cfg := withCapture([]CaptureField{{Name: "empty"}})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must have either 'field' or 'expression' set")
+	})
+
+	t.Run("invalid - capture name missing", func(t *testing.T) {
+		cfg := withCapture([]CaptureField{{Field: "metadata.name"}})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "capture name is required")
+	})
 }
