@@ -73,6 +73,14 @@ spec:
   # Global params
   # ============================================================================
   # params to extract from CloudEvent and environment variables
+  #
+  # SUPPORTED TYPES:
+  # ================
+  # - string: Default, any value converted to string
+  # - int/int64: Integer value (strings parsed, floats truncated)
+  # - float/float64: Floating point value
+  # - bool: Boolean (supports: true/false, yes/no, on/off, 1/0)
+  #
   params:
     # Environment variables from deployment
     - name: "hyperfleetApiBaseUrl"
@@ -93,6 +101,20 @@ spec:
       type: "string"
       description: "Unique identifier for the target cluster"
       required: true
+    
+    # Example: Extract and convert to int
+    # - name: "nodeCount"
+    #   source: "event.spec.nodeCount"
+    #   type: "int"
+    #   default: 3
+    #   description: "Number of nodes in the cluster"
+    
+    # Example: Extract and convert to bool
+    # - name: "enableFeature"
+    #   source: "env.ENABLE_FEATURE"
+    #   type: "bool"
+    #   default: false
+    #   description: "Enable experimental feature"
     
 
   # ============================================================================

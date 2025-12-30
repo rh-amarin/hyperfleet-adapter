@@ -42,7 +42,7 @@ ctx.Set("provider", "aws")
 ctx.Set("nodeCount", 5)
 
 // Create evaluator
-evaluator := criteria.NewEvaluator(ctx, log)
+evaluator, _ := criteria.NewEvaluator(context.Background(), ctx, log)
 
 // Evaluate a single condition
 result, err := evaluator.EvaluateCondition(
@@ -141,34 +141,17 @@ See: [Kubernetes JSONPath Reference](https://kubernetes.io/docs/reference/kubect
 The `ExtractValue` method provides a unified interface for extracting values using either field (JSONPath) or expression (CEL). This is used by captures, conditions, and payload building.
 
 ```go
-// Create evaluator with your data context
-ctx := criteria.NewEvaluationContext()
-ctx.SetVariablesFromMap(responseData)
-evaluator, _ := criteria.NewEvaluator(context.Background(), ctx, log)
-
-// Extract using JSONPath
+// Extract using JSONPath (using evaluator from Basic Evaluation example above)
 result, err := evaluator.ExtractValue("status.phase", "")
-if err != nil {
-    // Parse error only - field not found returns nil value, not error
-    log.Fatal(err)
-}
-if result.Value != nil {
-    fmt.Println("Phase:", result.Value)
-} else {
-    fmt.Println("Field not found, using default")
-}
 
 // Extract using CEL expression
 result, err = evaluator.ExtractValue("", "items.filter(i, i.status == 'active').size()")
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Println("Active count:", result.Value)
 ```
 
 The `ExtractValueResult` contains:
 - `Value`: The extracted value (nil if field not found or empty)
 - `Source`: The field path or expression used
+- `Error`: Runtime extraction error (if any)
 
 **Error handling:**
 - Returns `error` (2nd return) only for **parse errors** (invalid JSONPath/CEL syntax)
@@ -189,146 +172,34 @@ if ok {
     fmt.Println("Value:", val)
 }
 
-// Get nested field
-val, err := ctx.GetField("cluster.status.phase")
-
 // Merge contexts
 ctx2 := criteria.NewEvaluationContext()
 ctx2.Set("newKey", "newValue")
 ctx.Merge(ctx2) // ctx now has both key and newKey
 ```
 
-## Examples
-
-### Example 1: Cluster Validation
+#### GetField Method
 
 ```go
-// Simulate cluster details from API
-ctx := criteria.NewEvaluationContext()
-ctx.Set("clusterPhase", "Ready")
-ctx.Set("cloudProvider", "aws")
-ctx.Set("vpcId", "vpc-12345")
-
-evaluator := criteria.NewEvaluator(ctx, log)
-
-// Validate cluster is in correct phase
-phaseResult, _ := evaluator.EvaluateCondition(
-    "clusterPhase",
-    criteria.OperatorIn,
-    []interface{}{"Provisioning", "Installing", "Ready"},
-)
-
-// Validate provider is allowed
-providerResult, _ := evaluator.EvaluateCondition(
-    "cloudProvider",
-    criteria.OperatorIn,
-    []interface{}{"aws", "gcp", "azure"},
-)
-
-// Validate VPC exists
-vpcResult, _ := evaluator.EvaluateCondition(
-    "vpcId",
-    criteria.OperatorExists,
-    nil,
-)
-
-if phaseResult.Matched && providerResult.Matched && vpcResult.Matched {
-    fmt.Println("Cluster validation passed")
-}
+func (c *EvaluationContext) GetField(path string) (*FieldResult, error)
 ```
 
-### Example 2: Resource Status Check
+Retrieves a field using dot notation (e.g., `"cluster.status.phase"`) or JSONPath (e.g., `"{.items[0].name}"`).
 
-```go
-// Simulate resource status
-ctx := criteria.NewEvaluationContext()
-ctx.Set("resources", map[string]interface{}{
-    "clusterNamespace": map[string]interface{}{
-        "status": map[string]interface{}{
-            "phase": "Active",
-        },
-    },
-    "clusterController": map[string]interface{}{
-        "status": map[string]interface{}{
-            "replicas":      3,
-            "readyReplicas": 3,
-        },
-    },
-})
+**Return Values:**
 
-evaluator := criteria.NewEvaluator(ctx, log)
+- `*FieldResult.Value`: The extracted value (`string`, `float64`, `bool`, `map[string]interface{}`, `[]interface{}`, or `nil` if not found)
+- `*FieldResult.Error`: Runtime extraction error (e.g., JSONPath execution failure)
+- `error` (2nd return): Parse error for invalid path syntax
 
-// Check namespace is active
-nsResult, _ := evaluator.EvaluateCondition(
-    "resources.clusterNamespace.status.phase",
-    criteria.OperatorEquals,
-    "Active",
-)
+**Error Conditions:**
 
-// Check all replicas are ready
-replicasResult, _ := evaluator.EvaluateCondition(
-    "resources.clusterController.status.readyReplicas",
-    criteria.OperatorGreaterThan,
-    0,
-)
-
-if nsResult.Matched && replicasResult.Matched {
-    fmt.Println("Resources are healthy")
-}
-```
-
-### Example 3: Array and String Contains
-
-```go
-ctx := criteria.NewEvaluationContext()
-evaluator := criteria.NewEvaluator(ctx, log)
-
-// String contains
-ctx.Set("message", "Deployment ready and healthy")
-result, _ := evaluator.EvaluateCondition(
-    "message",
-    criteria.OperatorContains,
-    "ready",
-)
-fmt.Println("Message contains 'ready':", result.Matched) // true
-
-// Array contains
-ctx.Set("tags", []interface{}{"production", "us-east-1", "critical"})
-result, _ = evaluator.EvaluateCondition(
-    "tags",
-    criteria.OperatorContains,
-    "production",
-)
-fmt.Println("Tags contain 'production':", result.Matched) // true
-```
-
-### Example 4: Numeric Comparisons
-
-```go
-ctx := criteria.NewEvaluationContext()
-ctx.Set("nodeCount", 5)
-ctx.Set("minNodes", 1)
-ctx.Set("maxNodes", 10)
-
-evaluator := criteria.NewEvaluator(ctx, log)
-
-// Check if within range
-aboveMinResult, _ := evaluator.EvaluateCondition(
-    "nodeCount",
-    criteria.OperatorGreaterThan,
-    0, // nodeCount > 0 means >= 1
-)
-
-belowMaxResult, _ := evaluator.EvaluateCondition(
-    "nodeCount",
-    criteria.OperatorLessThan,
-    11, // nodeCount < 11 means <= 10
-)
-
-if aboveMinResult.Matched && belowMaxResult.Matched {
-    fmt.Println("Node count is within valid range")
-}
-```
+| Condition | `error` (2nd return) | `result.Value` | `result.Error` |
+|-----------|---------------------|----------------|----------------|
+| Empty path | `"empty field path"` | - | - |
+| Invalid JSONPath syntax | `"invalid field path..."` | - | - |
+| Field not found | `nil` | `nil` | `nil` |
+| JSONPath execution failure | `nil` | `nil` | set |
 
 ## Integration with Config Loader
 
@@ -353,7 +224,7 @@ ctx.Set("cloudProvider", "aws")
 ctx.Set("vpcId", "vpc-12345")
 
 // Evaluate precondition conditions
-evaluator := criteria.NewEvaluator(ctx, log)
+evaluator, _ := criteria.NewEvaluator(context.Background(), ctx, log)
 conditions := make([]criteria.ConditionDef, len(precond.Conditions))
 for i, cond := range precond.Conditions {
     conditions[i] = criteria.ConditionDef{
@@ -383,7 +254,7 @@ The package provides descriptive error messages:
 ctx := criteria.NewEvaluationContext()
 ctx.Set("count", "not a number")
 
-evaluator := criteria.NewEvaluator(ctx, log)
+evaluator, _ := criteria.NewEvaluator(context.Background(), ctx, log)
 result, err := evaluator.EvaluateCondition(
     "count",
     criteria.OperatorGreaterThan,

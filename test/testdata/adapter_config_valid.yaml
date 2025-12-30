@@ -73,7 +73,6 @@ spec:
           value: ["aws", "gcp", "azure"]
         - field: "vpcId"
           operator: "exists"
-          value: true
 
     - name: "validationCheck"
       # Valid CEL expression

@@ -327,8 +327,10 @@ func TestPostActionExecutor_ExecuteAll(t *testing.T) {
 			postConfig: &config_loader.PostConfig{
 				PostActions: []config_loader.PostAction{
 					{
-						Name: "log-status",
-						Log:  &config_loader.LogAction{Message: "Processing complete", Level: "info"},
+						ActionBase: config_loader.ActionBase{
+							Name: "log-status",
+							Log:  &config_loader.LogAction{Message: "Processing complete", Level: "info"},
+						},
 					},
 				},
 			},
@@ -339,9 +341,9 @@ func TestPostActionExecutor_ExecuteAll(t *testing.T) {
 			name: "multiple log actions",
 			postConfig: &config_loader.PostConfig{
 				PostActions: []config_loader.PostAction{
-					{Name: "log1", Log: &config_loader.LogAction{Message: "Step 1", Level: "info"}},
-					{Name: "log2", Log: &config_loader.LogAction{Message: "Step 2", Level: "info"}},
-					{Name: "log3", Log: &config_loader.LogAction{Message: "Step 3", Level: "info"}},
+					{ActionBase: config_loader.ActionBase{Name: "log1", Log: &config_loader.LogAction{Message: "Step 1", Level: "info"}}},
+					{ActionBase: config_loader.ActionBase{Name: "log2", Log: &config_loader.LogAction{Message: "Step 2", Level: "info"}}},
+					{ActionBase: config_loader.ActionBase{Name: "log3", Log: &config_loader.LogAction{Message: "Step 3", Level: "info"}}},
 				},
 			},
 			expectedResults: 3,
@@ -359,7 +361,7 @@ func TestPostActionExecutor_ExecuteAll(t *testing.T) {
 					},
 				},
 				PostActions: []config_loader.PostAction{
-					{Name: "log1", Log: &config_loader.LogAction{Message: "Done", Level: "info"}},
+					{ActionBase: config_loader.ActionBase{Name: "log1", Log: &config_loader.LogAction{Message: "Done", Level: "info"}}},
 				},
 			},
 			expectedResults: 1,

@@ -85,9 +85,9 @@ func TestWithErrorField(t *testing.T) {
 
 func TestShouldCaptureStackTrace_ContextErrors(t *testing.T) {
 	tests := []struct {
-		name           string
-		err            error
-		expectCapture  bool
+		name          string
+		err           error
+		expectCapture bool
 	}{
 		{
 			name:          "context.Canceled_skips_stack_trace",

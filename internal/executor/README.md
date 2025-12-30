@@ -141,9 +141,27 @@ params:
   - name: "apiToken"
     source: "env.API_TOKEN"
     required: true
+  - name: "nodeCount"
+    source: "event.spec.nodes"
+    type: "int"          # Convert to int64
+  - name: "enableFeature"
+    source: "env.ENABLE_FEATURE"
+    type: "bool"         # Convert to bool
+    default: false
 ```
 
 </details>
+
+#### Supported Parameter Types
+
+| Type | Description | Conversion Notes |
+|------|-------------|-----------------|
+| `string` | String value (default) | Any value converted to string |
+| `int`, `int64` | Integer value | Strings parsed, floats truncated |
+| `float`, `float64` | Floating point value | Strings parsed |
+| `bool` | Boolean value | Supports: `true/false`, `yes/no`, `on/off`, `1/0` |
+
+If `type` is not specified, the value retains its original type from the source.
 
 ### Phase 2: Precondition Evaluation
 

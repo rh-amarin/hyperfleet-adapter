@@ -338,7 +338,7 @@ spec:
     - name: "checkCluster"
 `,
 			wantError: true,
-			errorMsg:  "must specify apiCall, expression, or conditions",
+			errorMsg:  "spec.preconditions[0]: must specify apiCall, conditions",
 		},
 		{
 			name: "API call without method",
@@ -1049,26 +1049,35 @@ spec:
 }
 
 func TestValidateResourceDiscovery(t *testing.T) {
+	// Helper to create a valid config with given resources
+	configWithResources := func(resources []Resource) *AdapterConfig {
+		return &AdapterConfig{
+			APIVersion: "hyperfleet.openshift.io/v1alpha1",
+			Kind:       "AdapterConfig",
+			Metadata:   Metadata{Name: "test-adapter"},
+			Spec: AdapterConfigSpec{
+				Adapter:   AdapterInfo{Version: "1.0.0"},
+				Resources: resources,
+			},
+		}
+	}
+
 	tests := []struct {
-		name    string
-		config  *AdapterConfig
-		wantErr bool
-		errMsg  string
+		name      string
+		resources []Resource
+		wantErr   bool
+		errMsg    string
 	}{
 		{
 			name: "valid - manifest.ref with discovery bySelectors",
-			config: &AdapterConfig{
-				Spec: AdapterConfigSpec{
-					Resources: []Resource{
-						{
-							Name:     "test",
-							Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
-							Discovery: &DiscoveryConfig{
-								Namespace: "test-ns",
-								BySelectors: &SelectorConfig{
-									LabelSelector: map[string]string{"app": "test"},
-								},
-							},
+			resources: []Resource{
+				{
+					Name:     "test",
+					Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
+					Discovery: &DiscoveryConfig{
+						Namespace: "test-ns",
+						BySelectors: &SelectorConfig{
+							LabelSelector: map[string]string{"app": "test"},
 						},
 					},
 				},
@@ -1077,17 +1086,13 @@ func TestValidateResourceDiscovery(t *testing.T) {
 		},
 		{
 			name: "valid - manifest.ref with discovery byName",
-			config: &AdapterConfig{
-				Spec: AdapterConfigSpec{
-					Resources: []Resource{
-						{
-							Name:     "test",
-							Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
-							Discovery: &DiscoveryConfig{
-								Namespace: "*",
-								ByName:    "my-resource",
-							},
-						},
+			resources: []Resource{
+				{
+					Name:     "test",
+					Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
+					Discovery: &DiscoveryConfig{
+						Namespace: "*",
+						ByName:    "my-resource",
 					},
 				},
 			},
@@ -1095,20 +1100,16 @@ func TestValidateResourceDiscovery(t *testing.T) {
 		},
 		{
 			name: "valid - inline manifest with discovery",
-			config: &AdapterConfig{
-				Spec: AdapterConfigSpec{
-					Resources: []Resource{
-						{
-							Name: "test",
-							Manifest: map[string]interface{}{
-								"apiVersion": "v1",
-								"kind":       "ConfigMap",
-							},
-							Discovery: &DiscoveryConfig{
-								Namespace: "test-ns",
-								ByName:    "my-configmap",
-							},
-						},
+			resources: []Resource{
+				{
+					Name: "test",
+					Manifest: map[string]interface{}{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+					},
+					Discovery: &DiscoveryConfig{
+						Namespace: "test-ns",
+						ByName:    "my-configmap",
 					},
 				},
 			},
@@ -1116,18 +1117,14 @@ func TestValidateResourceDiscovery(t *testing.T) {
 		},
 		{
 			name: "invalid - inline manifest missing discovery",
-			config: &AdapterConfig{
-				Spec: AdapterConfigSpec{
-					Resources: []Resource{
-						{
-							Name: "test",
-							Manifest: map[string]interface{}{
-								"apiVersion": "v1",
-								"kind":       "ConfigMap",
-							},
-							// Missing discovery - now required for all resources
-						},
+			resources: []Resource{
+				{
+					Name: "test",
+					Manifest: map[string]interface{}{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
 					},
+					// Missing discovery - now required for all resources
 				},
 			},
 			wantErr: true,
@@ -1135,15 +1132,11 @@ func TestValidateResourceDiscovery(t *testing.T) {
 		},
 		{
 			name: "invalid - manifest.ref missing discovery",
-			config: &AdapterConfig{
-				Spec: AdapterConfigSpec{
-					Resources: []Resource{
-						{
-							Name:     "test",
-							Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
-							// Missing discovery
-						},
-					},
+			resources: []Resource{
+				{
+					Name:     "test",
+					Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
+					// Missing discovery
 				},
 			},
 			wantErr: true,
@@ -1151,17 +1144,13 @@ func TestValidateResourceDiscovery(t *testing.T) {
 		},
 		{
 			name: "valid - manifest.ref with discovery missing namespace (all namespaces)",
-			config: &AdapterConfig{
-				Spec: AdapterConfigSpec{
-					Resources: []Resource{
-						{
-							Name:     "test",
-							Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
-							Discovery: &DiscoveryConfig{
-								// Empty namespace means all namespaces
-								ByName: "my-resource",
-							},
-						},
+			resources: []Resource{
+				{
+					Name:     "test",
+					Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
+					Discovery: &DiscoveryConfig{
+						// Empty namespace means all namespaces
+						ByName: "my-resource",
 					},
 				},
 			},
@@ -1169,54 +1158,47 @@ func TestValidateResourceDiscovery(t *testing.T) {
 		},
 		{
 			name: "invalid - manifest.ref missing byName or bySelectors",
-			config: &AdapterConfig{
-				Spec: AdapterConfigSpec{
-					Resources: []Resource{
-						{
-							Name:     "test",
-							Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
-							Discovery: &DiscoveryConfig{
-								Namespace: "test-ns",
-								// Missing byName and bySelectors
-							},
-						},
+			resources: []Resource{
+				{
+					Name:     "test",
+					Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
+					Discovery: &DiscoveryConfig{
+						Namespace: "test-ns",
+						// Missing byName and bySelectors
 					},
 				},
 			},
 			wantErr: true,
-			errMsg:  "must have either byName or bySelectors",
+			errMsg:  "spec.resources[0].discovery: must have either 'byName' or 'bySelectors' set",
 		},
 		{
 			name: "invalid - bySelectors without labelSelector defined",
-			config: &AdapterConfig{
-				Spec: AdapterConfigSpec{
-					Resources: []Resource{
-						{
-							Name:     "test",
-							Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
-							Discovery: &DiscoveryConfig{
-								Namespace:   "test-ns",
-								BySelectors: &SelectorConfig{
-									// Empty selectors
-								},
-							},
+			resources: []Resource{
+				{
+					Name:     "test",
+					Manifest: map[string]interface{}{"ref": "templates/test.yaml"},
+					Discovery: &DiscoveryConfig{
+						Namespace:   "test-ns",
+						BySelectors: &SelectorConfig{
+							// Empty selectors
 						},
 					},
 				},
 			},
 			wantErr: true,
-			errMsg:  "must have labelSelector defined",
+			errMsg:  "spec.resources[0].discovery.bySelectors.labelSelector is required",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateResources(tt.config)
+			config := configWithResources(tt.resources)
+			errs := ValidateStruct(config)
 			if tt.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errMsg)
+				require.True(t, errs != nil && errs.HasErrors(), "expected error but got none")
+				assert.Contains(t, errs.Error(), tt.errMsg)
 			} else {
-				assert.NoError(t, err)
+				assert.True(t, errs == nil || !errs.HasErrors(), "unexpected error: %v", errs)
 			}
 		})
 	}

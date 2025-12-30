@@ -179,17 +179,19 @@ func createK8sTestConfig(apiBaseURL, testNamespace string) *config_loader.Adapte
 			},
 			Preconditions: []config_loader.Precondition{
 				{
-					Name: "clusterStatus",
-					APICall: &config_loader.APICall{
-						Method:  "GET",
-						URL:     "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}",
-						Timeout: "5s",
+					ActionBase: config_loader.ActionBase{
+						Name: "clusterStatus",
+						APICall: &config_loader.APICall{
+							Method:  "GET",
+							URL:     "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}",
+							Timeout: "5s",
+						},
 					},
 					Capture: []config_loader.CaptureField{
-						{Name: "clusterName", Field: "metadata.name"},
-						{Name: "clusterPhase", Field: "status.phase"},
-						{Name: "region", Field: "spec.region"},
-						{Name: "cloudProvider", Field: "spec.provider"},
+						{Name: "clusterName", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "metadata.name"}},
+						{Name: "clusterPhase", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "status.phase"}},
+						{Name: "region", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "spec.region"}},
+						{Name: "cloudProvider", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "spec.provider"}},
 					},
 					Conditions: []config_loader.Condition{
 						{Field: "clusterPhase", Operator: "in", Value: []interface{}{"Provisioning", "Installing", "Ready"}},
@@ -280,12 +282,14 @@ func createK8sTestConfig(apiBaseURL, testNamespace string) *config_loader.Adapte
 				},
 				PostActions: []config_loader.PostAction{
 					{
-						Name: "reportClusterStatus",
-						APICall: &config_loader.APICall{
-							Method:  "POST",
-							URL:     "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/status",
-							Body:    "{{ .clusterStatusPayload }}",
-							Timeout: "5s",
+						ActionBase: config_loader.ActionBase{
+							Name: "reportClusterStatus",
+							APICall: &config_loader.APICall{
+								Method:  "POST",
+								URL:     "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/status",
+								Body:    "{{ .clusterStatusPayload }}",
+								Timeout: "5s",
+							},
 						},
 					},
 				},

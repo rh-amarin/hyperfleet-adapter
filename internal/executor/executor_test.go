@@ -450,9 +450,9 @@ func TestSequentialExecution_Preconditions(t *testing.T) {
 		{
 			name: "all pass - all executed",
 			preconditions: []config_loader.Precondition{
-				{Name: "precond1", Expression: "true"},
-				{Name: "precond2", Expression: "true"},
-				{Name: "precond3", Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "precond1"}, Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "precond2"}, Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "precond3"}, Expression: "true"},
 			},
 			expectedResults:  3,
 			expectError:      false,
@@ -462,9 +462,9 @@ func TestSequentialExecution_Preconditions(t *testing.T) {
 		{
 			name: "first fails - stops immediately",
 			preconditions: []config_loader.Precondition{
-				{Name: "precond1", Expression: "false"},
-				{Name: "precond2", Expression: "true"},
-				{Name: "precond3", Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "precond1"}, Expression: "false"},
+				{ActionBase: config_loader.ActionBase{Name: "precond2"}, Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "precond3"}, Expression: "true"},
 			},
 			expectedResults:  1,
 			expectError:      false,
@@ -474,9 +474,9 @@ func TestSequentialExecution_Preconditions(t *testing.T) {
 		{
 			name: "second fails - first executes, stops at second",
 			preconditions: []config_loader.Precondition{
-				{Name: "precond1", Expression: "true"},
-				{Name: "precond2", Expression: "false"},
-				{Name: "precond3", Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "precond1"}, Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "precond2"}, Expression: "false"},
+				{ActionBase: config_loader.ActionBase{Name: "precond3"}, Expression: "true"},
 			},
 			expectedResults:  2,
 			expectError:      false,
@@ -486,9 +486,9 @@ func TestSequentialExecution_Preconditions(t *testing.T) {
 		{
 			name: "third fails - first two execute, stops at third",
 			preconditions: []config_loader.Precondition{
-				{Name: "precond1", Expression: "true"},
-				{Name: "precond2", Expression: "true"},
-				{Name: "precond3", Expression: "false"},
+				{ActionBase: config_loader.ActionBase{Name: "precond1"}, Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "precond2"}, Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "precond3"}, Expression: "false"},
 			},
 			expectedResults:  3,
 			expectError:      false,
@@ -653,9 +653,9 @@ func TestSequentialExecution_PostActions(t *testing.T) {
 		{
 			name: "all log actions succeed",
 			postActions: []config_loader.PostAction{
-				{Name: "log1", Log: &config_loader.LogAction{Message: "msg1"}},
-				{Name: "log2", Log: &config_loader.LogAction{Message: "msg2"}},
-				{Name: "log3", Log: &config_loader.LogAction{Message: "msg3"}},
+				{ActionBase: config_loader.ActionBase{Name: "log1", Log: &config_loader.LogAction{Message: "msg1"}}},
+				{ActionBase: config_loader.ActionBase{Name: "log2", Log: &config_loader.LogAction{Message: "msg2"}}},
+				{ActionBase: config_loader.ActionBase{Name: "log3", Log: &config_loader.LogAction{Message: "msg3"}}},
 			},
 			expectedResults: 3,
 			expectError:     false,
@@ -724,9 +724,9 @@ func TestSequentialExecution_SkipReasonCapture(t *testing.T) {
 		{
 			name: "first precondition not met",
 			preconditions: []config_loader.Precondition{
-				{Name: "check1", Expression: "false"},
-				{Name: "check2", Expression: "true"},
-				{Name: "check3", Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "check1"}, Expression: "false"},
+				{ActionBase: config_loader.ActionBase{Name: "check2"}, Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "check3"}, Expression: "true"},
 			},
 			expectedStatus: StatusSuccess, // Successful execution, just resources skipped
 			expectSkipped:  true,
@@ -734,9 +734,9 @@ func TestSequentialExecution_SkipReasonCapture(t *testing.T) {
 		{
 			name: "second precondition not met",
 			preconditions: []config_loader.Precondition{
-				{Name: "check1", Expression: "true"},
-				{Name: "check2", Expression: "false"},
-				{Name: "check3", Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "check1"}, Expression: "true"},
+				{ActionBase: config_loader.ActionBase{Name: "check2"}, Expression: "false"},
+				{ActionBase: config_loader.ActionBase{Name: "check3"}, Expression: "true"},
 			},
 			expectedStatus: StatusSuccess, // Successful execution, just resources skipped
 			expectSkipped:  true,

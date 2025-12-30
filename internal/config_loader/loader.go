@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -124,55 +125,128 @@ func Parse(data []byte, opts ...LoaderOption) (*AdapterConfig, error) {
 // Validation Pipeline
 // -----------------------------------------------------------------------------
 
-// validatorFunc is a function that validates a config and returns an error
-type validatorFunc func(*AdapterConfig) error
-
 // runValidationPipeline executes all validators in sequence
 func runValidationPipeline(config *AdapterConfig, cfg *loaderConfig) error {
-	// Core structural validators (always run)
-	coreValidators := []validatorFunc{
-		validateAPIVersionAndKind,
-		validateMetadata,
-		validateAdapterSpec,
-		validateParams,
-		validatePreconditions,
-		validateResources,
-		validatePostActions,
-		validatePayloads,
+	validator := NewValidator(config, cfg.baseDir)
+
+	// 1. Structural validation (fail-fast)
+	if err := validator.ValidateStructure(); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	for _, v := range coreValidators {
-		if err := v(config); err != nil {
-			return fmt.Errorf("validation failed: %w", err)
-		}
-	}
-
-	// Adapter version validation (optional)
+	// 2. Adapter version validation (optional)
 	if cfg.adapterVersion != "" {
 		if err := ValidateAdapterVersion(config, cfg.adapterVersion); err != nil {
 			return fmt.Errorf("adapter version validation failed: %w", err)
 		}
 	}
 
-	// File reference validation (buildRef, manifest.ref)
-	// Only run if baseDir is set (when loaded from file)
+	// 3. File reference validation and loading (only if baseDir is set)
 	if cfg.baseDir != "" {
-		if err := validateFileReferences(config, cfg.baseDir); err != nil {
+		if err := validator.ValidateFileReferences(); err != nil {
 			return fmt.Errorf("file reference validation failed: %w", err)
 		}
 
-		// Load file references (manifest.ref, buildRef) after validation passes
 		if err := loadFileReferences(config, cfg.baseDir); err != nil {
 			return fmt.Errorf("failed to load file references: %w", err)
 		}
 	}
 
-	// Semantic validation (optional, can be skipped for performance)
+	// 4. Semantic validation (optional, can be skipped for performance)
 	if !cfg.skipSemanticValidation {
-		if err := newValidator(config).Validate(); err != nil {
+		if err := validator.ValidateSemantic(); err != nil {
 			return fmt.Errorf("semantic validation failed: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// -----------------------------------------------------------------------------
+// File Reference Loading
+// -----------------------------------------------------------------------------
+
+// loadFileReferences loads content from file references into the config
+func loadFileReferences(config *AdapterConfig, baseDir string) error {
+	// Load manifest.ref in spec.resources
+	for i := range config.Spec.Resources {
+		resource := &config.Spec.Resources[i]
+		ref := resource.GetManifestRef()
+		if ref == "" {
+			continue
+		}
+
+		content, err := loadYAMLFile(baseDir, ref)
+		if err != nil {
+			return fmt.Errorf("%s.%s[%d].%s.%s: %w", FieldSpec, FieldResources, i, FieldManifest, FieldRef, err)
+		}
+
+		// Replace manifest with loaded content
+		resource.Manifest = content
+	}
+
+	// Load buildRef in spec.post.payloads
+	if config.Spec.Post != nil {
+		for i := range config.Spec.Post.Payloads {
+			payload := &config.Spec.Post.Payloads[i]
+			if payload.BuildRef != "" {
+				content, err := loadYAMLFile(baseDir, payload.BuildRef)
+				if err != nil {
+					return fmt.Errorf("%s.%s.%s[%d].%s: %w", FieldSpec, FieldPost, FieldPayloads, i, FieldBuildRef, err)
+				}
+				payload.BuildRefContent = content
+			}
+		}
+	}
+
+	return nil
+}
+
+// loadYAMLFile loads and parses a YAML file
+func loadYAMLFile(baseDir, refPath string) (map[string]interface{}, error) {
+	fullPath, err := resolvePath(baseDir, refPath)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %q: %w", fullPath, err)
+	}
+
+	var content map[string]interface{}
+	if err := yaml.Unmarshal(data, &content); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML file %q: %w", fullPath, err)
+	}
+
+	return content, nil
+}
+
+// resolvePath resolves a relative path against the base directory and validates
+// that the resolved path does not escape the base directory.
+func resolvePath(baseDir, refPath string) (string, error) {
+	baseAbs, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve base directory: %w", err)
+	}
+	baseClean := filepath.Clean(baseAbs)
+
+	var targetPath string
+	if filepath.IsAbs(refPath) {
+		targetPath = filepath.Clean(refPath)
+	} else {
+		targetPath = filepath.Clean(filepath.Join(baseClean, refPath))
+	}
+
+	// Check if target path is within base directory
+	rel, err := filepath.Rel(baseClean, targetPath)
+	if err != nil {
+		return "", fmt.Errorf("path %q escapes base directory", refPath)
+	}
+
+	if strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("path %q escapes base directory", refPath)
+	}
+
+	return targetPath, nil
 }

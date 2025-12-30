@@ -2,6 +2,7 @@ package config_loader
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
@@ -11,81 +12,75 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/criteria"
 )
 
-// -----------------------------------------------------------------------------
-// Validation Errors
-// -----------------------------------------------------------------------------
-
-// ValidationError represents a validation error with context
-type ValidationError struct {
-	Path    string
-	Message string
-}
-
-func (e *ValidationError) Error() string {
-	return fmt.Sprintf("%s: %s", e.Path, e.Message)
-}
-
-// ValidationErrors holds multiple validation errors
-type ValidationErrors struct {
-	Errors []ValidationError
-}
-
-func (ve *ValidationErrors) Error() string {
-	if len(ve.Errors) == 0 {
-		return "no validation errors"
-	}
-	var msgs []string
-	for _, e := range ve.Errors {
-		msgs = append(msgs, e.Error())
-	}
-	return fmt.Sprintf("validation failed with %d error(s):\n  - %s", len(ve.Errors), strings.Join(msgs, "\n  - "))
-}
-
-func (ve *ValidationErrors) Add(path, message string) {
-	ve.Errors = append(ve.Errors, ValidationError{Path: path, Message: message})
-}
-
-func (ve *ValidationErrors) HasErrors() bool {
-	return len(ve.Errors) > 0
-}
+// templateVarRegex matches Go template variables like {{ .varName }} or {{ .nested.var }}
+var templateVarRegex = regexp.MustCompile(`\{\{\s*\.([a-zA-Z_][a-zA-Z0-9_\.]*)\s*(?:\|[^}]*)?\}\}`)
 
 // -----------------------------------------------------------------------------
 // Validator
 // -----------------------------------------------------------------------------
 
-// Validator performs semantic validation on AdapterConfig.
-// It validates operators, template variables, CEL expressions, and K8s manifests.
+// Validator performs all validation on AdapterConfig:
+// - Structural validation (required fields, formats)
+// - Semantic validation (CEL expressions, templates, operators, K8s manifests)
 type Validator struct {
-	config        *AdapterConfig
-	errors        *ValidationErrors
-	definedParams map[string]bool
-	celEnv        *cel.Env
+	config      *AdapterConfig
+	baseDir     string // Base directory for file reference validation
+	errors      *ValidationErrors
+	definedVars map[string]bool // All defined variables (params + resources + captures)
+	celEnv      *cel.Env
 }
 
-// newValidator creates a new Validator for the given config
-func newValidator(config *AdapterConfig) *Validator {
+// NewValidator creates a new Validator for the given config
+func NewValidator(config *AdapterConfig, baseDir string) *Validator {
 	return &Validator{
-		config: config,
-		errors: &ValidationErrors{},
+		config:  config,
+		baseDir: baseDir,
+		errors:  &ValidationErrors{},
 	}
 }
 
-// Validate performs all semantic validations and returns any errors.
-// This is the main entry point for validation.
-func (v *Validator) Validate() error {
+// ValidateStructure performs structural validation (required fields, formats).
+// Uses go-playground/validator for basic struct validation, then runs custom validations.
+// Returns error on first failure (fail-fast).
+func (v *Validator) ValidateStructure() error {
+	// Phase 1: Struct tag validation (required fields, formats, enums)
+	if errs := ValidateStruct(v.config); errs != nil && errs.HasErrors() {
+		return fmt.Errorf("%s", errs.First())
+	}
+
+	// Phase 2: Custom validations that can't be expressed via struct tags
+	if err := v.validateAPIVersionSupported(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ValidateFileReferences validates that all file references exist.
+// Only meaningful if baseDir is set.
+func (v *Validator) ValidateFileReferences() error {
+	if v.baseDir == "" {
+		return nil
+	}
+	return v.validateFileReferences()
+}
+
+// ValidateSemantic performs semantic validation (CEL, templates, operators, K8s).
+// Collects all errors rather than failing fast.
+func (v *Validator) ValidateSemantic() error {
 	if v.config == nil {
 		return fmt.Errorf("config is nil")
 	}
 
 	// Initialize validation context
-	v.collectDefinedParameters()
+	v.collectDefinedVariables()
 	if err := v.initCELEnv(); err != nil {
 		v.errors.Add("cel", fmt.Sprintf("failed to create CEL environment: %v", err))
 	}
 
-	// Run all validators
-	v.validateConditionOperators()
-	v.validateCaptureFields()
+	// Run all semantic validators
+	v.validateConditionValues()
+	v.validateCaptureFieldExpressions()
 	v.validateTemplateVariables()
 	v.validateCELExpressions()
 	v.validateK8sManifests()
@@ -96,67 +91,120 @@ func (v *Validator) Validate() error {
 	return nil
 }
 
-// -----------------------------------------------------------------------------
-// Parameter Collection
-// -----------------------------------------------------------------------------
+// =============================================================================
+// CUSTOM STRUCTURAL VALIDATION
+// =============================================================================
+// These validations can't be expressed via struct tags and run after tag validation.
 
-// collectDefinedParameters collects all defined parameter names for template validation
-func (v *Validator) collectDefinedParameters() {
-	v.definedParams = v.config.GetDefinedVariables()
+// validateAPIVersionSupported checks that the apiVersion is in the supported list
+func (v *Validator) validateAPIVersionSupported() error {
+	if !IsSupportedAPIVersion(v.config.APIVersion) {
+		return fmt.Errorf("unsupported apiVersion %q (supported: %s)",
+			v.config.APIVersion, strings.Join(SupportedAPIVersions, ", "))
+	}
+	return nil
 }
 
-// -----------------------------------------------------------------------------
-// Operator Validation
-// -----------------------------------------------------------------------------
+// =============================================================================
+// FILE REFERENCE VALIDATION
+// =============================================================================
 
-// validateConditionOperators validates all condition operators in the config
-func (v *Validator) validateConditionOperators() {
-	// Validate precondition conditions
+func (v *Validator) validateFileReferences() error {
+	var errors []string
+
+	// Validate buildRef in spec.post.payloads
+	if v.config.Spec.Post != nil {
+		for i, payload := range v.config.Spec.Post.Payloads {
+			if payload.BuildRef != "" {
+				path := fmt.Sprintf("%s.%s.%s[%d].%s", FieldSpec, FieldPost, FieldPayloads, i, FieldBuildRef)
+				if err := v.validateFileExists(payload.BuildRef, path); err != nil {
+					errors = append(errors, err.Error())
+				}
+			}
+		}
+	}
+
+	// Validate manifest.ref in spec.resources
+	for i, resource := range v.config.Spec.Resources {
+		ref := resource.GetManifestRef()
+		if ref != "" {
+			path := fmt.Sprintf("%s.%s[%d].%s.%s", FieldSpec, FieldResources, i, FieldManifest, FieldRef)
+			if err := v.validateFileExists(ref, path); err != nil {
+				errors = append(errors, err.Error())
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("file reference errors:\n  - %s", strings.Join(errors, "\n  - "))
+	}
+	return nil
+}
+
+func (v *Validator) validateFileExists(refPath, configPath string) error {
+	if refPath == "" {
+		return fmt.Errorf("%s: file reference is empty", configPath)
+	}
+
+	fullPath, err := resolvePath(v.baseDir, refPath)
+	if err != nil {
+		return fmt.Errorf("%s: %w", configPath, err)
+	}
+
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%s: referenced file %q does not exist (resolved to %q)", configPath, refPath, fullPath)
+		}
+		return fmt.Errorf("%s: error checking file %q: %w", configPath, refPath, err)
+	}
+
+	if info.IsDir() {
+		return fmt.Errorf("%s: referenced path %q is a directory, not a file", configPath, refPath)
+	}
+
+	return nil
+}
+
+// =============================================================================
+// SEMANTIC VALIDATION: Operators
+// =============================================================================
+
+func (v *Validator) collectDefinedVariables() {
+	v.definedVars = v.config.GetDefinedVariables()
+}
+
+// =============================================================================
+// SEMANTIC VALIDATION: Condition Values
+// =============================================================================
+
+func (v *Validator) validateConditionValues() {
+	// Operator validation (required, valid enum) is handled by struct validator.
+	// This validates condition values based on operator requirements.
 	for i, precond := range v.config.Spec.Preconditions {
 		for j, cond := range precond.Conditions {
 			path := fmt.Sprintf("%s.%s[%d].%s[%d]", FieldSpec, FieldPreconditions, i, FieldConditions, j)
-			v.validateCondition(cond, path)
+			v.validateConditionValue(cond.Operator, cond.Value, path)
 		}
 	}
 }
 
-// validateCondition validates a single condition including operator and value
-func (v *Validator) validateCondition(cond Condition, path string) {
-	// Validate operator
-	v.validateOperator(cond.Operator, path)
-
-	// Validate value based on operator
-	v.validateConditionValue(cond.Operator, cond.Value, path)
-}
-
-// validateOperator checks if an operator is valid
-func (v *Validator) validateOperator(operator string, path string) {
-	if operator == "" {
-		v.errors.Add(path, "operator is required")
-		return
-	}
-	if !criteria.IsValidOperator(operator) {
-		v.errors.Add(path, fmt.Sprintf("invalid operator %q, must be one of: %s",
-			operator, strings.Join(criteria.OperatorStrings(), ", ")))
-	}
-}
-
-// validateConditionValue validates that the value is appropriate for the operator
 func (v *Validator) validateConditionValue(operator string, value interface{}, path string) {
 	op := criteria.Operator(operator)
 
-	// "exists" operator does not require a value
 	if op == criteria.OperatorExists {
+		// "exists" operator checks for field presence, value should not be set
+		if value != nil {
+			v.errors.Add(path, fmt.Sprintf("value/values should not be set for operator \"%s\"", operator))
+		}
 		return
 	}
 
-	// All other operators require a value
 	if value == nil {
 		v.errors.Add(path, fmt.Sprintf("value is required for operator %q", operator))
 		return
 	}
 
-	// "in" and "notIn" operators require a list/array value
 	if op == criteria.OperatorIn || op == criteria.OperatorNotIn {
 		if !isSliceOrArray(value) {
 			v.errors.Add(path, fmt.Sprintf("value must be a list for operator %q", operator))
@@ -164,7 +212,6 @@ func (v *Validator) validateConditionValue(operator string, value interface{}, p
 	}
 }
 
-// isSliceOrArray checks if a value is a slice or array
 func isSliceOrArray(value interface{}) bool {
 	if value == nil {
 		return false
@@ -173,51 +220,28 @@ func isSliceOrArray(value interface{}) bool {
 	return kind == reflect.Slice || kind == reflect.Array
 }
 
-// -----------------------------------------------------------------------------
-// Capture Field Validation
-// -----------------------------------------------------------------------------
+// =============================================================================
+// SEMANTIC VALIDATION: Capture Field CEL Expressions
+// =============================================================================
 
-// validateCaptureFields validates capture fields in preconditions
-func (v *Validator) validateCaptureFields() {
+func (v *Validator) validateCaptureFieldExpressions() {
+	// Structural validation (name required, field/expression mutual exclusivity)
+	// is handled by struct validator tags in types.go.
+	// This validates CEL expression syntax only.
 	for i, precond := range v.config.Spec.Preconditions {
 		for j, capture := range precond.Capture {
-			path := fmt.Sprintf("%s.%s[%d].%s[%d]", FieldSpec, FieldPreconditions, i, FieldCapture, j)
-			v.validateCaptureField(capture, path)
+			if capture.Expression != "" && v.celEnv != nil {
+				path := fmt.Sprintf("%s.%s[%d].%s[%d].%s", FieldSpec, FieldPreconditions, i, FieldCapture, j, FieldExpression)
+				v.validateCELExpression(capture.Expression, path)
+			}
 		}
 	}
 }
 
-// validateCaptureField validates a single capture field configuration
-func (v *Validator) validateCaptureField(capture CaptureField, path string) {
-	// Name is required
-	if capture.Name == "" {
-		v.errors.Add(path, "capture name is required")
-	}
+// =============================================================================
+// SEMANTIC VALIDATION: Template Variables
+// =============================================================================
 
-	hasField := capture.Field != ""
-	hasExpression := capture.Expression != ""
-
-	// Must have exactly one of field or expression
-	if !hasField && !hasExpression {
-		v.errors.Add(path, "capture must have either 'field' or 'expression' set")
-	} else if hasField && hasExpression {
-		v.errors.Add(path, "capture cannot have both 'field' and 'expression' set; use only one")
-	}
-
-	// If expression is set, validate it as CEL
-	if hasExpression && v.celEnv != nil {
-		v.validateCELExpression(capture.Expression, path+"."+FieldExpression)
-	}
-}
-
-// -----------------------------------------------------------------------------
-// Template Variable Validation
-// -----------------------------------------------------------------------------
-
-// templateVarRegex matches Go template variables like {{ .varName }} or {{ .nested.var }}
-var templateVarRegex = regexp.MustCompile(`\{\{\s*\.([a-zA-Z_][a-zA-Z0-9_\.]*)\s*(?:\|[^}]*)?\}\}`)
-
-// validateTemplateVariables validates that template variables are defined
 func (v *Validator) validateTemplateVariables() {
 	// Validate precondition API call URLs and bodies
 	for i, precond := range v.config.Spec.Preconditions {
@@ -265,7 +289,7 @@ func (v *Validator) validateTemplateVariables() {
 			}
 		}
 
-		// Validate post payload build value templates (build is now interface{})
+		// Validate post payload build value templates
 		for i, payload := range v.config.Spec.Post.Payloads {
 			if payload.Build != nil {
 				if buildMap, ok := payload.Build.(map[string]interface{}); ok {
@@ -274,10 +298,8 @@ func (v *Validator) validateTemplateVariables() {
 			}
 		}
 	}
-
 }
 
-// validateTemplateString checks template variables in a string
 func (v *Validator) validateTemplateString(s string, path string) {
 	if s == "" {
 		return
@@ -294,30 +316,22 @@ func (v *Validator) validateTemplateString(s string, path string) {
 	}
 }
 
-// isVariableDefined checks if a variable is defined (including nested paths)
 func (v *Validator) isVariableDefined(varName string) bool {
-	// Check exact match
-	if v.definedParams[varName] {
+	if v.definedVars[varName] {
 		return true
 	}
 
-	// Check if the root variable is defined (for nested paths like clusterDetails.status.phase)
 	parts := strings.Split(varName, ".")
 	if len(parts) > 0 {
 		root := parts[0]
 
-		// Handle simple root variables (e.g. "metadata", "clusterId")
-		if v.definedParams[root] {
+		if v.definedVars[root] {
 			return true
 		}
 
-		// Special handling for resource aliases: treat "resources.<name>" as a root.
-		// Resource aliases are registered as "resources.clusterNamespace" etc.,
-		// so we need to check if "resources.<alias>" is defined for paths like
-		// "resources.clusterNamespace.metadata.namespace"
 		if root == FieldResources && len(parts) > 1 {
 			alias := root + "." + parts[1]
-			if v.definedParams[alias] {
+			if v.definedVars[alias] {
 				return true
 			}
 		}
@@ -326,7 +340,6 @@ func (v *Validator) isVariableDefined(varName string) bool {
 	return false
 }
 
-// validateTemplateMap recursively validates template variables in a map
 func (v *Validator) validateTemplateMap(m map[string]interface{}, path string) {
 	for key, value := range m {
 		currentPath := fmt.Sprintf("%s.%s", path, key)
@@ -348,45 +361,34 @@ func (v *Validator) validateTemplateMap(m map[string]interface{}, path string) {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// CEL Expression Validation
-// -----------------------------------------------------------------------------
+// =============================================================================
+// SEMANTIC VALIDATION: CEL Expressions
+// =============================================================================
 
-// initCELEnv initializes the CEL environment dynamically from config-defined variables.
-// This uses v.definedParams which must be populated by collectDefinedParameters() first.
 func (v *Validator) initCELEnv() error {
-	// Pre-allocate capacity: +2 for cel.OptionalTypes() and potential "resources" variable
-	options := make([]cel.EnvOption, 0, len(v.definedParams)+2)
-
-	// Enable optional types for optional chaining syntax (e.g., a.?b.?c)
+	options := make([]cel.EnvOption, 0, len(v.definedVars)+2)
 	options = append(options, cel.OptionalTypes())
 
-	// Track root variables we've already added (to avoid duplicates for nested paths)
 	addedRoots := make(map[string]bool)
 
-	for varName := range v.definedParams {
-		// Extract root variable name (e.g., "clusterDetails" from "clusterDetails.status.phase")
+	for varName := range v.definedVars {
 		root := varName
 		if idx := strings.Index(varName, "."); idx > 0 {
 			root = varName[:idx]
 		}
 
-		// Skip if we've already added this root variable
 		if addedRoots[root] {
 			continue
 		}
 		addedRoots[root] = true
 
-		// Use DynType since we don't know the actual type at validation time
 		options = append(options, cel.Variable(root, cel.DynType))
 	}
 
-	// Always add "resources" as a map for resource lookups like resources.clusterNamespace
 	if !addedRoots[FieldResources] {
 		options = append(options, cel.Variable(FieldResources, cel.MapType(cel.StringType, cel.DynType)))
 	}
 
-	// Always add "adapter" as a map for adapter metadata lookups like adapter.executionStatus
 	if !addedRoots[FieldAdapter] {
 		options = append(options, cel.Variable(FieldAdapter, cel.MapType(cel.StringType, cel.DynType)))
 	}
@@ -399,13 +401,11 @@ func (v *Validator) initCELEnv() error {
 	return nil
 }
 
-// validateCELExpressions validates all CEL expressions in the config
 func (v *Validator) validateCELExpressions() {
 	if v.celEnv == nil {
-		return // CEL env initialization failed, already reported
+		return
 	}
 
-	// Validate precondition expressions
 	for i, precond := range v.config.Spec.Preconditions {
 		if precond.Expression != "" {
 			path := fmt.Sprintf("%s.%s[%d].%s", FieldSpec, FieldPreconditions, i, FieldExpression)
@@ -413,8 +413,6 @@ func (v *Validator) validateCELExpressions() {
 		}
 	}
 
-	// Validate post payload build expressions (build is now interface{})
-	// We recursively find and validate any "expression" fields in the build structure
 	if v.config.Spec.Post != nil {
 		for i, payload := range v.config.Spec.Post.Payloads {
 			if payload.Build != nil {
@@ -426,32 +424,24 @@ func (v *Validator) validateCELExpressions() {
 	}
 }
 
-// validateCELExpression validates a single CEL expression (syntax only)
-// Type checking is skipped because variables are dynamic (DynType) and
-// their actual types are only known at runtime.
 func (v *Validator) validateCELExpression(expr string, path string) {
 	if expr == "" {
 		return
 	}
 
-	// Clean up the expression (remove leading/trailing whitespace and newlines)
 	expr = strings.TrimSpace(expr)
 
-	// Syntax validation only
 	_, issues := v.celEnv.Parse(expr)
 	if issues != nil && issues.Err() != nil {
 		v.errors.Add(path, fmt.Sprintf("CEL parse error: %v", issues.Err()))
 	}
 }
 
-// validateBuildExpressions recursively validates CEL expressions in a build structure.
-// It looks for any field named "expression" and validates it as a CEL expression.
 func (v *Validator) validateBuildExpressions(m map[string]interface{}, path string) {
 	for key, value := range m {
 		currentPath := fmt.Sprintf("%s.%s", path, key)
 		switch val := value.(type) {
 		case string:
-			// If the key is "expression", validate it as CEL
 			if key == FieldExpression {
 				v.validateCELExpression(val, currentPath)
 			}
@@ -468,35 +458,28 @@ func (v *Validator) validateBuildExpressions(m map[string]interface{}, path stri
 	}
 }
 
-// -----------------------------------------------------------------------------
-// Kubernetes Manifest Validation
-// -----------------------------------------------------------------------------
+// =============================================================================
+// SEMANTIC VALIDATION: Kubernetes Manifests
+// =============================================================================
 
-// validateK8sManifests validates Kubernetes resource manifests
 func (v *Validator) validateK8sManifests() {
 	for i, resource := range v.config.Spec.Resources {
 		path := fmt.Sprintf("%s.%s[%d].%s", FieldSpec, FieldResources, i, FieldManifest)
 
-		// Validate inline or single-ref manifest
 		if manifest, ok := resource.Manifest.(map[string]interface{}); ok {
-			// Check for ref (external template reference)
 			if ref, hasRef := manifest[FieldRef].(string); hasRef {
 				if ref == "" {
 					v.errors.Add(path+"."+FieldRef, "manifest ref cannot be empty")
 				}
-				// Single ref: content will have been loaded into Manifest by loadFileReferences
-				// and will be validated below if it's a valid manifest map
 			} else {
-				// Inline manifest - validate it
+				// Embedded manifest - validate K8s structure
 				v.validateK8sManifest(manifest, path)
 			}
 		}
 	}
 }
 
-// validateK8sManifest validates a single Kubernetes manifest
 func (v *Validator) validateK8sManifest(manifest map[string]interface{}, path string) {
-	// Required fields for K8s resources
 	requiredFields := []string{FieldAPIVersion, FieldKind, FieldMetadata}
 
 	for _, field := range requiredFields {
@@ -505,24 +488,69 @@ func (v *Validator) validateK8sManifest(manifest map[string]interface{}, path st
 		}
 	}
 
-	// Validate metadata has name
 	if metadata, ok := manifest[FieldMetadata].(map[string]interface{}); ok {
 		if _, hasName := metadata[FieldName]; !hasName {
 			v.errors.Add(path+"."+FieldMetadata, fmt.Sprintf("missing required field %q", FieldName))
 		}
 	}
 
-	// Validate apiVersion format
 	if apiVersion, ok := manifest[FieldAPIVersion].(string); ok {
 		if apiVersion == "" {
 			v.errors.Add(path+"."+FieldAPIVersion, "apiVersion cannot be empty")
 		}
 	}
 
-	// Validate kind
 	if kind, ok := manifest[FieldKind].(string); ok {
 		if kind == "" {
 			v.errors.Add(path+"."+FieldKind, "kind cannot be empty")
 		}
 	}
+}
+
+// =============================================================================
+// HELPER FUNCTIONS
+// =============================================================================
+
+// IsSupportedAPIVersion checks if the given apiVersion is supported
+func IsSupportedAPIVersion(apiVersion string) bool {
+	for _, v := range SupportedAPIVersions {
+		if v == apiVersion {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateAdapterVersion validates the config's adapter version matches the expected version
+func ValidateAdapterVersion(config *AdapterConfig, expectedVersion string) error {
+	if expectedVersion == "" {
+		return nil
+	}
+
+	configVersion := config.Spec.Adapter.Version
+	if configVersion != expectedVersion {
+		return fmt.Errorf("adapter version mismatch: config %q != adapter %q",
+			configVersion, expectedVersion)
+	}
+
+	return nil
+}
+
+// =============================================================================
+// TEST HELPERS
+// =============================================================================
+
+// newValidator creates a Validator without baseDir (for tests)
+func newValidator(config *AdapterConfig) *Validator {
+	return NewValidator(config, "")
+}
+
+// Validate is a convenience method that runs semantic validation
+func (v *Validator) Validate() error {
+	return v.ValidateSemantic()
+}
+
+// validateFileReferences validates file references exist (for tests)
+func validateFileReferences(config *AdapterConfig, baseDir string) error {
+	return NewValidator(config, baseDir).ValidateFileReferences()
 }

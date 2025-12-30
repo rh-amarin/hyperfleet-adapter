@@ -5,9 +5,21 @@ The `config_loader` package loads and validates HyperFleet Adapter configuration
 ## Features
 
 - **YAML Parsing**: Load configurations from files or bytes
-- **Validation**: Required fields, structure, CEL expressions, K8s manifests
-- **Type Safety**: Strongly-typed Go structs
+- **Structural Validation**: Required fields, formats, enums via `go-playground/validator`
+- **Semantic Validation**: CEL expressions, template variables, K8s manifests
+- **Type Safety**: Strongly-typed Go structs with struct embedding
 - **Helper Methods**: Query params, resources, preconditions by name
+
+## Package Structure
+
+| File | Purpose |
+|------|---------|
+| `loader.go` | Load configs from file/bytes, resolve file references |
+| `types.go` | All type definitions with validation tags |
+| `validator.go` | Orchestrates structural + semantic validation |
+| `struct_validator.go` | `go-playground/validator` integration |
+| `accessors.go` | Helper methods for querying config |
+| `constants.go` | Field names, API versions, regex patterns |
 
 ## Usage
 
@@ -63,19 +75,52 @@ See `configs/adapter-config-template.yaml` for the complete configuration refere
 
 ## Validation
 
-The loader validates:
-- Required fields (`apiVersion`, `kind`, `metadata.name`, `adapter.version`)
-- HTTP methods in API calls (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`)
-- Parameters have `source`
-- File references exist (`buildRef`, `manifest.ref`)
-- CEL expressions are syntactically valid
-- K8s manifests have required fields
-- CaptureField has either `field` or `expression` (not both, not neither)
+### Two-Phase Validation
+
+1. **Structural Validation** (`ValidateStructure`)
+   - Uses `go-playground/validator` with struct tags
+   - Required fields, enum values, mutual exclusivity
+   - Custom validators: `resourcename`, `validoperator`
+
+2. **Semantic Validation** (`ValidateSemantic`)
+   - CEL expression syntax
+   - Template variable references
+   - Condition value types
+   - K8s manifest required fields
+
+### Validation Tags
+
+```go
+// Required field
+Name string `yaml:"name" validate:"required"`
+
+// Enum validation
+Method string `yaml:"method" validate:"required,oneof=GET POST PUT PATCH DELETE"`
+
+// Mutual exclusivity (field OR expression, not both)
+Field      string `yaml:"field,omitempty" validate:"required_without=Expression,excluded_with=Expression"`
+Expression string `yaml:"expression,omitempty" validate:"required_without=Field,excluded_with=Field"`
+
+// Custom validators
+Name     string `yaml:"name" validate:"required,resourcename"`
+Operator string `yaml:"operator" validate:"required,validoperator"`
+```
+
+### Custom Validators
+
+| Tag | Purpose |
+|-----|---------|
+| `resourcename` | CEL-compatible names (lowercase start, no hyphens) |
+| `validoperator` | Valid condition operators (eq, neq, in, notIn, exists) |
+
+### Error Messages
 
 Validation errors are descriptive:
 ```
 spec.params[0].name is required
-spec.preconditions[1].apiCall.method must be one of: GET, POST, PUT, PATCH, DELETE
+spec.preconditions[1].apiCall.method "INVALID" is invalid (allowed: GET, POST, PUT, PATCH, DELETE)
+spec.resources[0].name "my-resource": must start with lowercase letter and contain only letters, numbers, underscores (no hyphens)
+spec.preconditions[0].capture[0]: must have either 'field' or 'expression' set
 ```
 
 ## Types
@@ -89,8 +134,43 @@ spec.preconditions[1].apiCall.method must be one of: GET, POST, PUT, PATCH, DELE
 | `PostConfig` | Post-processing actions |
 | `APICall` | HTTP request configuration |
 | `Condition` | Field/operator/value condition |
-| `CaptureField` | Field capture from API response (see below) |
-| `ValueDef` | Dynamic value definition in payload builds (see below) |
+| `CaptureField` | Field capture from API response |
+| `ValueDef` | Dynamic value definition in payload builds |
+| `ValidationErrors` | Collection of validation errors |
+
+### Struct Embedding
+
+The package uses struct embedding to reduce duplication:
+
+```go
+// ActionBase - common fields for actions (preconditions, post-actions)
+type ActionBase struct {
+    Name    string   `yaml:"name" validate:"required"`
+    APICall *APICall `yaml:"apiCall,omitempty"`
+}
+
+// FieldExpressionDef - field OR expression (mutually exclusive)
+type FieldExpressionDef struct {
+    Field      string `yaml:"field,omitempty" validate:"required_without=Expression,excluded_with=Expression"`
+    Expression string `yaml:"expression,omitempty" validate:"required_without=Field,excluded_with=Field"`
+}
+```
+
+### ValidationErrors
+
+Collect and manage multiple validation errors:
+
+```go
+errors := &ValidationErrors{}
+errors.Add("path.to.field", "error message")
+errors.Extend(otherErrors)  // Merge from another ValidationErrors
+
+if errors.HasErrors() {
+    fmt.Println(errors.First())  // Get first error message
+    fmt.Println(errors.Count())  // Number of errors
+    return errors                // Implements error interface
+}
+```
 
 ### CaptureField
 
@@ -144,7 +224,6 @@ build:
 ```
 
 See `types.go` for complete definitions.
-
 
 ## Related
 

@@ -28,7 +28,7 @@ func TestValidateConditionOperators(t *testing.T) {
 	withCondition := func(cond Condition) *AdapterConfig {
 		cfg := baseConfig()
 		cfg.Spec.Preconditions = []Precondition{{
-			Name:       "checkStatus",
+			ActionBase: ActionBase{Name: "checkStatus"},
 			Conditions: []Condition{cond},
 		}}
 		return cfg
@@ -37,7 +37,7 @@ func TestValidateConditionOperators(t *testing.T) {
 	t.Run("valid operators", func(t *testing.T) {
 		cfg := baseConfig()
 		cfg.Spec.Preconditions = []Precondition{{
-			Name: "checkStatus",
+			ActionBase: ActionBase{Name: "checkStatus"},
 			Conditions: []Condition{
 				{Field: "status", Operator: "equals", Value: "Ready"},
 				{Field: "provider", Operator: "in", Value: []interface{}{"aws", "gcp"}},
@@ -49,16 +49,16 @@ func TestValidateConditionOperators(t *testing.T) {
 
 	t.Run("invalid operator", func(t *testing.T) {
 		cfg := withCondition(Condition{Field: "status", Operator: "invalidOp", Value: "Ready"})
-		err := newValidator(cfg).Validate()
+		err := newValidator(cfg).ValidateStructure()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid operator")
 	})
 
 	t.Run("missing operator", func(t *testing.T) {
 		cfg := withCondition(Condition{Field: "status", Value: "Ready"})
-		err := newValidator(cfg).Validate()
+		err := newValidator(cfg).ValidateStructure()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "operator is required")
+		assert.Contains(t, err.Error(), "operator")
 	})
 
 	t.Run("missing value for equals operator", func(t *testing.T) {
@@ -94,6 +94,20 @@ func TestValidateConditionOperators(t *testing.T) {
 		assert.NoError(t, newValidator(cfg).Validate())
 	})
 
+	t.Run("exists operator with value should fail", func(t *testing.T) {
+		cfg := withCondition(Condition{Field: "vpcId", Operator: "exists", Value: "any-value"})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "value/values should not be set for operator \"exists\"")
+	})
+
+	t.Run("exists operator with list value should fail", func(t *testing.T) {
+		cfg := withCondition(Condition{Field: "vpcId", Operator: "exists", Value: []interface{}{"a", "b"}})
+		err := newValidator(cfg).Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "value/values should not be set for operator \"exists\"")
+	})
+
 	t.Run("missing value for greaterThan operator", func(t *testing.T) {
 		cfg := withCondition(Condition{Field: "count", Operator: "greaterThan"})
 		err := newValidator(cfg).Validate()
@@ -110,8 +124,10 @@ func TestValidateTemplateVariables(t *testing.T) {
 			{Name: "apiUrl", Source: "env.API_URL"},
 		}
 		cfg.Spec.Preconditions = []Precondition{{
-			Name:    "checkCluster",
-			APICall: &APICall{Method: "GET", URL: "{{ .apiUrl }}/clusters/{{ .clusterId }}"},
+			ActionBase: ActionBase{
+				Name:    "checkCluster",
+				APICall: &APICall{Method: "GET", URL: "{{ .apiUrl }}/clusters/{{ .clusterId }}"},
+			},
 		}}
 		assert.NoError(t, newValidator(cfg).Validate())
 	})
@@ -120,8 +136,10 @@ func TestValidateTemplateVariables(t *testing.T) {
 		cfg := baseConfig()
 		cfg.Spec.Params = []Parameter{{Name: "clusterId", Source: "event.cluster_id"}}
 		cfg.Spec.Preconditions = []Precondition{{
-			Name:    "checkCluster",
-			APICall: &APICall{Method: "GET", URL: "{{ .undefinedVar }}/clusters/{{ .clusterId }}"},
+			ActionBase: ActionBase{
+				Name:    "checkCluster",
+				APICall: &APICall{Method: "GET", URL: "{{ .undefinedVar }}/clusters/{{ .clusterId }}"},
+			},
 		}}
 		err := newValidator(cfg).Validate()
 		require.Error(t, err)
@@ -149,9 +167,11 @@ func TestValidateTemplateVariables(t *testing.T) {
 		cfg := baseConfig()
 		cfg.Spec.Params = []Parameter{{Name: "apiUrl", Source: "env.API_URL"}}
 		cfg.Spec.Preconditions = []Precondition{{
-			Name:    "getCluster",
-			APICall: &APICall{Method: "GET", URL: "{{ .apiUrl }}/clusters"},
-			Capture: []CaptureField{{Name: "clusterName", Field: "metadata.name"}},
+			ActionBase: ActionBase{
+				Name:    "getCluster",
+				APICall: &APICall{Method: "GET", URL: "{{ .apiUrl }}/clusters"},
+			},
+			Capture: []CaptureField{{Name: "clusterName", FieldExpressionDef: FieldExpressionDef{Field: "metadata.name"}}},
 		}}
 		cfg.Spec.Resources = []Resource{{
 			Name: "testNs",
@@ -170,7 +190,7 @@ func TestValidateCELExpressions(t *testing.T) {
 	// Helper to create config with a CEL expression precondition
 	withExpression := func(expr string) *AdapterConfig {
 		cfg := baseConfig()
-		cfg.Spec.Preconditions = []Precondition{{Name: "check", Expression: expr}}
+		cfg.Spec.Preconditions = []Precondition{{ActionBase: ActionBase{Name: "check"}, Expression: expr}}
 		return cfg
 	}
 
@@ -298,8 +318,8 @@ func TestValidate(t *testing.T) {
 	// Test that Validate catches multiple errors
 	cfg := baseConfig()
 	cfg.Spec.Preconditions = []Precondition{
-		{Name: "check1", Conditions: []Condition{{Field: "status", Operator: "badOperator", Value: "Ready"}}},
-		{Name: "check2", Expression: "invalid ))) syntax"},
+		{ActionBase: ActionBase{Name: "check1"}, Conditions: []Condition{{Field: "status", Operator: "badOperator", Value: "Ready"}}},
+		{ActionBase: ActionBase{Name: "check2"}, Expression: "invalid ))) syntax"},
 	}
 	cfg.Spec.Resources = []Resource{{
 		Name: "testNs",
@@ -364,7 +384,7 @@ func TestPayloadValidate(t *testing.T) {
 				BuildRef: "templates/payload.yaml",
 			},
 			wantError: true,
-			errorMsg:  "build and buildRef are mutually exclusive",
+			errorMsg:  "mutually exclusive",
 		},
 		{
 			name: "invalid - neither Build nor BuildRef set",
@@ -372,18 +392,21 @@ func TestPayloadValidate(t *testing.T) {
 				Name: "test",
 			},
 			wantError: true,
-			errorMsg:  "either build or buildRef must be set",
+			errorMsg:  "must have either 'build' or 'buildRef' set",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.payload.Validate()
+			errs := ValidateStruct(&tt.payload)
 			if tt.wantError {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorMsg)
+				require.NotNil(t, errs)
+				require.True(t, errs.HasErrors())
+				assert.Contains(t, errs.Error(), tt.errorMsg)
 			} else {
-				assert.NoError(t, err)
+				if errs != nil {
+					assert.False(t, errs.HasErrors(), "unexpected error: %v", errs)
+				}
 			}
 		})
 	}
@@ -424,13 +447,13 @@ spec:
           status: "ready"
         buildRef: "templates/payload.yaml"`)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "build and buildRef are mutually exclusive")
+		assert.Contains(t, err.Error(), "mutually exclusive")
 	})
 
 	t.Run("invalid - neither build nor buildRef specified", func(t *testing.T) {
 		_, err := parseWithPayloads(`      - name: "statusPayload"`)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "either build or buildRef must be set")
+		assert.Contains(t, err.Error(), "must have either")
 	})
 
 	t.Run("invalid - payload name missing", func(t *testing.T) {
@@ -449,7 +472,7 @@ spec:
           data: "test"
         buildRef: "templates/conflict.yaml"`)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "payload2")
+		assert.Contains(t, err.Error(), "payloads[1]")
 	})
 }
 
@@ -458,8 +481,10 @@ func TestValidateCaptureFields(t *testing.T) {
 	withCapture := func(captures []CaptureField) *AdapterConfig {
 		cfg := baseConfig()
 		cfg.Spec.Preconditions = []Precondition{{
-			Name:    "getStatus",
-			APICall: &APICall{Method: "GET", URL: "http://example.com/api"},
+			ActionBase: ActionBase{
+				Name:    "getStatus",
+				APICall: &APICall{Method: "GET", URL: "http://example.com/api"},
+			},
 			Capture: captures,
 		}}
 		return cfg
@@ -467,35 +492,79 @@ func TestValidateCaptureFields(t *testing.T) {
 
 	t.Run("valid capture with field only", func(t *testing.T) {
 		cfg := withCapture([]CaptureField{
-			{Name: "clusterName", Field: "metadata.name"},
-			{Name: "clusterPhase", Field: "status.phase"},
+			{Name: "clusterName", FieldExpressionDef: FieldExpressionDef{Field: "metadata.name"}},
+			{Name: "clusterPhase", FieldExpressionDef: FieldExpressionDef{Field: "status.phase"}},
 		})
 		assert.NoError(t, newValidator(cfg).Validate())
 	})
 
 	t.Run("valid capture with expression only", func(t *testing.T) {
-		cfg := withCapture([]CaptureField{{Name: "activeCount", Expression: "1 + 1"}})
+		cfg := withCapture([]CaptureField{{Name: "activeCount", FieldExpressionDef: FieldExpressionDef{Expression: "1 + 1"}}})
 		assert.NoError(t, newValidator(cfg).Validate())
 	})
 
 	t.Run("invalid - both field and expression set", func(t *testing.T) {
-		cfg := withCapture([]CaptureField{{Name: "conflicting", Field: "metadata.name", Expression: "1 + 1"}})
-		err := newValidator(cfg).Validate()
+		cfg := withCapture([]CaptureField{{Name: "conflicting", FieldExpressionDef: FieldExpressionDef{Field: "metadata.name", Expression: "1 + 1"}}})
+		err := newValidator(cfg).ValidateStructure()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot have both 'field' and 'expression' set")
+		assert.Contains(t, err.Error(), "mutually exclusive")
 	})
 
 	t.Run("invalid - neither field nor expression set", func(t *testing.T) {
 		cfg := withCapture([]CaptureField{{Name: "empty"}})
-		err := newValidator(cfg).Validate()
+		err := newValidator(cfg).ValidateStructure()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "must have either 'field' or 'expression' set")
+		assert.Contains(t, err.Error(), "must have either")
 	})
 
 	t.Run("invalid - capture name missing", func(t *testing.T) {
-		cfg := withCapture([]CaptureField{{Field: "metadata.name"}})
-		err := newValidator(cfg).Validate()
+		cfg := withCapture([]CaptureField{{FieldExpressionDef: FieldExpressionDef{Field: "metadata.name"}}})
+		err := newValidator(cfg).ValidateStructure()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "capture name is required")
+		assert.Contains(t, err.Error(), "name is required")
 	})
+}
+
+func TestYamlFieldName(t *testing.T) {
+	// Ensure validator is initialized (populates fieldNameCache)
+	getStructValidator()
+
+	tests := []struct {
+		goFieldName  string
+		expectedYaml string
+	}{
+		{"ByName", "byName"},
+		{"BySelectors", "bySelectors"},
+		{"Field", "field"},
+		{"Expression", "expression"},
+		{"APIVersion", "apiVersion"},
+		{"Name", "name"},
+		{"Namespace", "namespace"},
+		{"LabelSelector", "labelSelector"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.goFieldName, func(t *testing.T) {
+			result := yamlFieldName(tt.goFieldName)
+			assert.Equal(t, tt.expectedYaml, result)
+		})
+	}
+}
+
+func TestFieldNameCachePopulated(t *testing.T) {
+	// Ensure validator is initialized
+	getStructValidator()
+
+	// Verify key fields are in the cache
+	expectedFields := []string{
+		"ByName", "BySelectors", "Field", "Expression",
+		"Name", "Namespace", "APIVersion", "Kind",
+	}
+
+	for _, field := range expectedFields {
+		t.Run(field, func(t *testing.T) {
+			_, ok := fieldNameCache[field]
+			assert.True(t, ok, "field %s should be in cache", field)
+		})
+	}
 }
