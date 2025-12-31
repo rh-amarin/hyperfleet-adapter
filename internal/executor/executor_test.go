@@ -524,10 +524,8 @@ func TestSequentialExecution_Preconditions(t *testing.T) {
 			result := exec.Execute(ctx, map[string]interface{}{})
 
 			// Verify number of precondition results
-			if len(result.PreconditionResults) != tt.expectedResults {
-				t.Errorf("expected %d precondition results, got %d",
-					tt.expectedResults, len(result.PreconditionResults))
-			}
+			assert.Equal(t, tt.expectedResults, len(result.PreconditionResults),
+				"unexpected precondition result count")
 
 			// Verify last executed precondition name
 			if len(result.PreconditionResults) > 0 {
@@ -629,10 +627,8 @@ func TestSequentialExecution_Resources(t *testing.T) {
 			result := exec.Execute(ctx, map[string]interface{}{})
 
 			// Verify sequential stop-on-failure: number of results should match expected
-			if len(result.ResourceResults) != tt.expectedResults {
-				t.Errorf("expected %d resource results, got %d (sequential execution should stop at failure)",
-					tt.expectedResults, len(result.ResourceResults))
-			}
+			assert.Equal(t, tt.expectedResults, len(result.ResourceResults),
+				"sequential execution should stop at failure")
 
 			// Verify failure status
 			if tt.expectFailure {
@@ -703,14 +699,15 @@ func TestSequentialExecution_PostActions(t *testing.T) {
 			result := exec.Execute(ctx, map[string]interface{}{})
 
 			// Verify number of post action results
-			if len(result.PostActionResults) != tt.expectedResults {
-				t.Errorf("expected %d post action results, got %d",
-					tt.expectedResults, len(result.PostActionResults))
-			}
+			assert.Equal(t, tt.expectedResults, len(result.PostActionResults),
+				"unexpected post action result count")
 
 			// Verify error expectation
-			if tt.expectError && result.Error == nil {
-				t.Error("expected error but got nil")
+			if tt.expectError {
+				assert.NotEmpty(t, result.Errors, "expected errors, got none")
+				assert.NotNil(t, result.Errors[PhasePostActions], "expected post_actions error, got %#v", result.Errors)
+			} else {
+				assert.Empty(t, result.Errors, "expected no errors, got %#v", result.Errors)
 			}
 		})
 	}

@@ -85,7 +85,7 @@ handler := exec.CreateHandler()
 // Or execute directly
 result := exec.Execute(ctx, cloudEvent)
 if result.Status == executor.StatusFailed {
-    log.Errorf("Execution failed: %v", result.Error)
+    log.Errorf("Execution failed: %v", result.Errors)
 } else if result.ResourcesSkipped {
     log.Infof("Execution succeeded, resources skipped: %s", result.SkipReason)
 } else {
@@ -348,13 +348,12 @@ post:
 ```go
 type ExecutionResult struct {
     Status              ExecutionStatus  // success, failed (process execution perspective)
-    Phase               ExecutionPhase   // where execution ended
+    CurrentPhase        ExecutionPhase   // where execution ended
     Params              map[string]interface{}
     PreconditionResults []PreconditionResult
     ResourceResults     []ResourceResult
     PostActionResults   []PostActionResult
-    Error               error            // process execution error only
-    ErrorReason         string           // process execution error reason
+    Errors              map[ExecutionPhase]error // errors keyed by phase
     ResourcesSkipped    bool             // business outcome: resources were skipped
     SkipReason          string           // why resources were skipped
 }
@@ -398,9 +397,8 @@ When preconditions are not satisfied, the executor:
 
 Process execution errors are captured in `ExecutionResult` with:
 - `Status`: `failed`
-- `Error`: The actual error
-- `ErrorReason`: Human-readable reason
-- `Phase`: Phase where error occurred
+- `Errors`: map keyed by phase with the encountered error(s)
+- `CurrentPhase`: Phase where execution ended (may be post_actions even if earlier phase failed)
 
 ### Error and Status Reporting
 

@@ -114,9 +114,7 @@ func TestExecutor_FullFlow_Success(t *testing.T) {
 	result := exec.Execute(ctx, evt)
 
 	// Verify result
-	if result.Status != executor.StatusSuccess {
-		t.Errorf("Expected success status, got %s: %v", result.Status, result.Error)
-	}
+	require.Equal(t, executor.StatusSuccess, result.Status, "Expected success status; errors=%v", result.Errors)
 
 	// Verify params were extracted
 	if result.Params["clusterId"] != "cluster-123" {
@@ -355,9 +353,7 @@ func TestExecutor_PreconditionAPIFailure(t *testing.T) {
 		t.Errorf("Expected failed status, got %s", result.Status)
 	}
 
-	if result.Error == nil {
-		t.Error("Expected error to be set")
-	}
+	require.NotEmpty(t, result.Errors, "expected errors to be set")
 
 	// Verify resources were not processed due to precondition failure
 	if len(result.ResourceResults) > 0 {
@@ -412,7 +408,7 @@ func TestExecutor_PreconditionAPIFailure(t *testing.T) {
 		}
 	}
 
-	t.Logf("Execution failed as expected: %v", result.Error)
+	t.Logf("Execution failed as expected: errors=%v", result.Errors)
 }
 
 func TestExecutor_CELExpressionEvaluation(t *testing.T) {
@@ -464,9 +460,7 @@ func TestExecutor_CELExpressionEvaluation(t *testing.T) {
 	result := exec.Execute(ctx, evt)
 
 	// Verify CEL evaluation passed
-	if result.Status != executor.StatusSuccess {
-		t.Errorf("Expected success status, got %s: %v", result.Status, result.Error)
-	}
+	require.Equal(t, executor.StatusSuccess, result.Status, "Expected success status; errors=%v", result.Errors)
 
 	if len(result.PreconditionResults) != 1 {
 		t.Fatalf("Expected 1 precondition result, got %d", len(result.PreconditionResults))
@@ -518,7 +512,7 @@ func TestExecutor_MultipleMessages(t *testing.T) {
 	// Verify all succeeded with isolated params
 	for i, result := range results {
 		if result.Status != executor.StatusSuccess {
-			t.Errorf("Message %d failed: %v", i, result.Error)
+			require.Empty(t, result.Errors, "Message %d failed: errors=%v", i, result.Errors)
 			continue
 		}
 
@@ -652,7 +646,8 @@ func TestExecutor_ContextCancellation(t *testing.T) {
 
 	// Should fail due to context cancellation
 	// Note: The exact behavior depends on where cancellation is checked
-	t.Logf("Result with cancelled context: status=%s, error=%v", result.Status, result.Error)
+	require.NotEmpty(t, result.Errors, "Expected error for cancelled context")
+	t.Logf("Result with cancelled context: status=%s, errors=%v", result.Status, result.Errors)
 }
 
 func TestExecutor_MissingRequiredParam(t *testing.T) {
@@ -691,8 +686,8 @@ func TestExecutor_MissingRequiredParam(t *testing.T) {
 		t.Errorf("Expected failed status for missing required param, got %s", result.Status)
 	}
 
-	if result.Phase != executor.PhaseParamExtraction {
-		t.Errorf("Expected failure in param_extraction phase, got %s", result.Phase)
+	if result.CurrentPhase != executor.PhaseParamExtraction {
+		t.Errorf("Expected failure in param_extraction phase, got %s", result.CurrentPhase)
 	}
 
 	// Post-actions DO NOT execute for param extraction failures
@@ -718,7 +713,8 @@ func TestExecutor_MissingRequiredParam(t *testing.T) {
 		t.Errorf("Handler should ACK (return nil) for param extraction failures, got error: %v", err)
 	}
 
-	t.Logf("Correctly failed with missing required param and ACKed (not NACKed): %v", result.Error)
+	require.NotEmpty(t, result.Errors, "Expected errors for missing required param")
+	t.Logf("Correctly failed with missing required param and ACKed (not NACKed): errors=%v", result.Errors)
 }
 
 // TestExecutor_InvalidEventJSON tests handling of malformed event data
@@ -757,9 +753,9 @@ func TestExecutor_InvalidEventJSON(t *testing.T) {
 
 	// Should fail during param extraction (JSON parsing)
 	assert.Equal(t, executor.StatusFailed, result.Status, "Should fail with invalid JSON")
-	assert.Equal(t, executor.PhaseParamExtraction, result.Phase, "Should fail in param extraction phase")
-	assert.NotNil(t, result.Error, "Should have error set")
-	t.Logf("Invalid JSON error: %v", result.Error)
+	assert.Equal(t, executor.PhaseParamExtraction, result.CurrentPhase, "Should fail in param extraction phase")
+	require.NotEmpty(t, result.Errors, "Should have error set")
+	t.Logf("Invalid JSON errors: %v", result.Errors)
 
 	// All phases should be skipped for invalid events
 	assert.Empty(t, result.PostActionResults, "Post-actions should not execute for invalid event")
@@ -812,10 +808,13 @@ func TestExecutor_MissingEventFields(t *testing.T) {
 
 	// Should fail during param extraction (missing required param from event)
 	assert.Equal(t, executor.StatusFailed, result.Status, "Should fail with missing required field")
-	assert.Equal(t, executor.PhaseParamExtraction, result.Phase, "Should fail in param extraction")
-	assert.NotNil(t, result.Error)
-	assert.Contains(t, result.Error.Error(), "clusterId", "Error should mention missing clusterId")
-	t.Logf("Missing field error: %v", result.Error)
+	assert.Equal(t, executor.PhaseParamExtraction, result.CurrentPhase, "Should fail in param extraction")
+	require.NotEmpty(t, result.Errors)
+	// Expect failure in param extraction phase
+	errPhase := result.Errors[executor.PhaseParamExtraction]
+	require.Error(t, errPhase)
+	assert.Contains(t, errPhase.Error(), "clusterId", "Error should mention missing clusterId")
+	t.Logf("Missing field error: %v", errPhase)
 
 	// All phases should be skipped for events with missing required fields
 	assert.Empty(t, result.PostActionResults, "Post-actions should not execute for missing required field")
@@ -824,8 +823,8 @@ func TestExecutor_MissingEventFields(t *testing.T) {
 
 	// Test handler behavior: should ACK (not NACK) events with missing required fields
 	handler := exec.CreateHandler()
-	err = handler(context.Background(), &evt)
-	assert.Nil(t, err, "Handler should ACK (return nil) for missing required fields, not NACK")
+	errPhase = handler(context.Background(), &evt)
+	assert.Nil(t, errPhase, "Handler should ACK (return nil) for missing required fields, not NACK")
 
 	t.Log("Expected behavior: Event with missing required field is ACKed (not NACKed), all phases skipped")
 }
@@ -932,7 +931,7 @@ func TestExecutor_LogAction(t *testing.T) {
 
 	// Should succeed
 	if result.Status != executor.StatusSuccess {
-		t.Fatalf("Expected success, got %s: %v", result.Status, result.Error)
+		t.Fatalf("Expected success, got %s: errors=%v", result.Status, result.Errors)
 	}
 
 	// Verify log messages were captured
@@ -1002,8 +1001,8 @@ func TestExecutor_PostActionAPIFailure(t *testing.T) {
 
 	// Verify result - should be failed due to post action API error
 	assert.Equal(t, executor.StatusFailed, result.Status, "Expected failed status for post action API error")
-	assert.NotNil(t, result.Error, "Expected error to be set")
-	t.Logf("Post action API failure error: %v", result.Error)
+	require.NotEmpty(t, result.Errors, "Expected error to be set")
+	t.Logf("Post action API failure errors: %v", result.Errors)
 
 	// Verify preconditions passed successfully
 	assert.Equal(t, 1, len(result.PreconditionResults), "Expected 1 precondition result")
@@ -1043,7 +1042,7 @@ func TestExecutor_PostActionAPIFailure(t *testing.T) {
 	}
 
 	// Verify the phase is post_actions
-	assert.Equal(t, executor.PhasePostActions, result.Phase, "Expected failure in post_actions phase")
+	assert.Equal(t, executor.PhasePostActions, result.CurrentPhase, "Expected failure in post_actions phase")
 
 	// Verify precondition API was called, but status POST failed
 	requests := mockAPI.GetRequests()
@@ -1177,7 +1176,7 @@ func TestExecutor_ExecutionError_CELAccess(t *testing.T) {
 
 	// Verify execution failed (due to precondition failure)
 	assert.Equal(t, executor.StatusFailed, result.Status, "Expected failed status")
-	assert.NotNil(t, result.Error, "Expected error to be set")
+	require.NotEmpty(t, result.Errors, "Expected error to be set")
 
 	// Verify post action was attempted (to report the error)
 	assert.Equal(t, 1, len(result.PostActionResults), "Expected 1 post action result")
@@ -1318,8 +1317,8 @@ func TestExecutor_PayloadBuildFailure(t *testing.T) {
 
 	// Verify execution failed in post_actions phase (payload build)
 	assert.Equal(t, executor.StatusFailed, result.Status, "Expected failed status")
-	assert.Equal(t, executor.PhasePostActions, result.Phase, "Expected failure in post_actions phase")
-	assert.NotNil(t, result.Error, "Expected error to be set")
+	assert.Equal(t, executor.PhasePostActions, result.CurrentPhase, "Expected failure in post_actions phase")
+	require.NotEmpty(t, result.Errors, "Expected error to be set")
 
 	// Verify preconditions passed
 	assert.Equal(t, 1, len(result.PreconditionResults), "Expected 1 precondition result")

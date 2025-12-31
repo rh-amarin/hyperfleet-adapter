@@ -342,7 +342,7 @@ func TestExecutor_K8s_CreateResources(t *testing.T) {
 
 	// Verify execution succeeded
 	if result.Status != executor.StatusSuccess {
-		t.Fatalf("Expected success status, got %s: %v (phase: %s)", result.Status, result.Error, result.Phase)
+		t.Fatalf("Expected success status, got %s: errors=%v (phase: %s)", result.Status, result.Errors, result.CurrentPhase)
 	}
 
 	t.Logf("Execution completed successfully")
@@ -482,7 +482,7 @@ func TestExecutor_K8s_UpdateExistingResource(t *testing.T) {
 	evt := createK8sTestEvent(clusterId)
 	result := exec.Execute(ctx, evt)
 
-	require.Equal(t, executor.StatusSuccess, result.Status, "Execution should succeed: %v", result.Error)
+	require.Equal(t, executor.StatusSuccess, result.Status, "Execution should succeed: errors=%v", result.Errors)
 
 	// Verify it was an update operation
 	require.Len(t, result.ResourceResults, 1)
@@ -769,9 +769,9 @@ func TestExecutor_K8s_ResourceCreationFailure(t *testing.T) {
 	assert.Equal(t, executor.StatusFailed, result.Status)
 	// Phase will be post_actions because executor continues to post-actions after resource failure
 	// This is correct behavior - we want to report errors even when resources fail
-	assert.Equal(t, executor.PhasePostActions, result.Phase)
-	assert.NotNil(t, result.Error)
-	t.Logf("Expected failure: %v", result.Error)
+	assert.Equal(t, executor.PhasePostActions, result.CurrentPhase)
+	require.NotEmpty(t, result.Errors, "Expected error to be set")
+	t.Logf("Expected failure: errors=%v", result.Errors)
 
 	// Post actions should still execute to report error
 	assert.NotEmpty(t, result.PostActionResults, "Post actions should still execute")
@@ -920,7 +920,8 @@ func TestExecutor_K8s_MultipleMatchingResources(t *testing.T) {
 	evt := createK8sTestEvent(clusterId)
 	result := exec.Execute(ctx, evt)
 
-	require.Equal(t, executor.StatusSuccess, result.Status, "Execution should succeed: %v", result.Error)
+	require.Equal(t, executor.StatusSuccess, result.Status, "Execution should succeed: errors=%v", result.Errors)
+
 	require.Len(t, result.ResourceResults, 1)
 
 	// Should create a new resource (no discovery configured)

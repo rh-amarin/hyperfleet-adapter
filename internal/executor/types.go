@@ -78,8 +78,8 @@ type Executor struct {
 type ExecutionResult struct {
 	// Status is the overall execution status (runtime perspective)
 	Status ExecutionStatus
-	// Phase is the phase where execution ended
-	Phase ExecutionPhase
+	// CurrentPhase is the phase where execution ended (or is currently)
+	CurrentPhase ExecutionPhase
 	// Params contains the extracted parameters
 	Params map[string]interface{}
 	// PreconditionResults contains results of precondition evaluations
@@ -88,10 +88,8 @@ type ExecutionResult struct {
 	ResourceResults []ResourceResult
 	// PostActionResults contains results of post-action executions
 	PostActionResults []PostActionResult
-	// Error is the error if Status is StatusFailed (process execution error only)
-	Error error
-	// ErrorReason is a human-readable error reason (process execution error only)
-	ErrorReason string
+	// Errors contains errors keyed by the phase where they occurred
+	Errors map[ExecutionPhase]error
 	// ResourcesSkipped indicates if resources were skipped (business outcome)
 	ResourcesSkipped bool
 	// SkipReason is why resources were skipped (e.g., "precondition not met")

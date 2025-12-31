@@ -54,12 +54,12 @@ func (e *Executor) Execute(ctx context.Context, data interface{}) *ExecutionResu
 	// Parse event data
 	eventData, rawData, err := ParseEventData(data)
 	if err != nil {
-		e.log.Errorf(ctx, "Failed to parse event data: %v", err)
+		parseErr := fmt.Errorf("failed to parse event data: %w", err)
+		e.log.Errorf(ctx, "Failed to parse event data: %v", parseErr)
 		return &ExecutionResult{
-			Status:      StatusFailed,
-			Phase:       PhaseParamExtraction,
-			Error:       err,
-			ErrorReason: "failed to parse event data",
+			Status:       StatusFailed,
+			CurrentPhase: PhaseParamExtraction,
+			Errors:       map[ExecutionPhase]error{PhaseParamExtraction: parseErr},
 		}
 	}
 
@@ -79,37 +79,41 @@ func (e *Executor) Execute(ctx context.Context, data interface{}) *ExecutionResu
 
 	// Initialize execution result
 	result := &ExecutionResult{
-		Status: StatusSuccess,
-		Params: make(map[string]interface{}),
+		Status:       StatusSuccess,
+		Params:       make(map[string]interface{}),
+		Errors:       make(map[ExecutionPhase]error),
+		CurrentPhase: PhaseParamExtraction,
 	}
 
 	e.log.Info(ctx, "Processing event")
 
 	// Phase 1: Parameter Extraction
 	e.log.Info(ctx, "Phase: Parameter Extraction")
-	result.Phase = PhaseParamExtraction
 	if err := e.executeParamExtraction(execCtx); err != nil {
-		return e.finishWithError(ctx, result, execCtx, err, fmt.Sprintf("parameter extraction failed: %v", err))
+		result.Status = StatusFailed
+		result.Errors[PhaseParamExtraction] = err
+		execCtx.SetError("ParameterExtractionFailed", err.Error())
+		return result
 	}
 	result.Params = execCtx.Params
-	e.log.Infof(ctx, "Parameter extraction completed: extracted %d params", len(execCtx.Params))
-	for k, v := range execCtx.Params {
-		e.log.Debugf(ctx, "param[%s]=%v type=%T", k, v, v)
-	}
+	e.log.Debugf(ctx, "Parameter extraction completed: extracted %d params", len(execCtx.Params))
 
 	// Phase 2: Preconditions
 	e.log.Infof(ctx, "Phase: Preconditions (%d configured)", len(e.config.AdapterConfig.Spec.Preconditions))
-	result.Phase = PhasePreconditions
+	result.CurrentPhase = PhasePreconditions
 	precondOutcome := e.precondExecutor.ExecuteAll(ctx, e.config.AdapterConfig.Spec.Preconditions, execCtx)
 	result.PreconditionResults = precondOutcome.Results
 
 	if precondOutcome.Error != nil {
 		// Process execution error: precondition evaluation failed
 		result.Status = StatusFailed
-		result.Error = precondOutcome.Error
-		result.ErrorReason = "precondition evaluation failed"
+		precondErr := fmt.Errorf("precondition evaluation failed: %w", precondOutcome.Error)
+		result.Errors[result.CurrentPhase] = precondErr
 		execCtx.SetError("PreconditionFailed", precondOutcome.Error.Error())
 		e.log.Errorf(ctx, "Precondition execution failed: %v", precondOutcome.Error)
+		result.ResourcesSkipped = true
+		result.SkipReason = "PreconditionFailed"
+		execCtx.SetSkipped("PreconditionFailed", precondOutcome.Error.Error())
 		// Continue to post actions for error reporting
 	} else if !precondOutcome.AllMatched {
 		// Business outcome: precondition not satisfied
@@ -124,15 +128,15 @@ func (e *Executor) Execute(ctx context.Context, data interface{}) *ExecutionResu
 
 	// Phase 3: Resources (skip if preconditions not met or previous error)
 	e.log.Infof(ctx, "Phase: Resources (%d configured)", len(e.config.AdapterConfig.Spec.Resources))
-	result.Phase = PhaseResources
-	if result.Status == StatusSuccess && !result.ResourcesSkipped {
+	result.CurrentPhase = PhaseResources
+	if !result.ResourcesSkipped {
 		resourceResults, err := e.resourceExecutor.ExecuteAll(ctx, e.config.AdapterConfig.Spec.Resources, execCtx)
 		result.ResourceResults = resourceResults
 
 		if err != nil {
 			result.Status = StatusFailed
-			result.Error = err
-			result.ErrorReason = "resource execution failed"
+			resErr := fmt.Errorf("resource execution failed: %w", err)
+			result.Errors[result.CurrentPhase] = resErr
 			execCtx.SetError("ResourceFailed", err.Error())
 			e.log.Errorf(ctx, "Resource execution FAILED: %v", err)
 			// Continue to post actions for error reporting
@@ -142,10 +146,8 @@ func (e *Executor) Execute(ctx context.Context, data interface{}) *ExecutionResu
 				e.log.Infof(ctx, "resource[%s]: kind=%s namespace=%s name=%s operation=%s", r.Name, r.Kind, r.Namespace, r.ResourceName, r.Operation)
 			}
 		}
-	} else if result.ResourcesSkipped {
+	} else {
 		e.log.Infof(ctx, "Resources SKIPPED: %s", result.SkipReason)
-	} else if result.Status == StatusFailed {
-		e.log.Infof(ctx, "Resources SKIPPED due to previous error")
 	}
 
 	// Phase 4: Post Actions (always execute for error reporting)
@@ -154,14 +156,14 @@ func (e *Executor) Execute(ctx context.Context, data interface{}) *ExecutionResu
 		postActionCount = len(e.config.AdapterConfig.Spec.Post.PostActions)
 	}
 	e.log.Infof(ctx, "Phase: Post Actions (%d configured)", postActionCount)
-	result.Phase = PhasePostActions
+	result.CurrentPhase = PhasePostActions
 	postResults, err := e.postActionExecutor.ExecuteAll(ctx, e.config.AdapterConfig.Spec.Post, execCtx)
 	result.PostActionResults = postResults
 
 	if err != nil {
 		result.Status = StatusFailed
-		result.Error = err
-		result.ErrorReason = "post action execution failed"
+		postErr := fmt.Errorf("post action execution failed: %w", err)
+		result.Errors[result.CurrentPhase] = postErr
 		e.log.Errorf(ctx, "Post action execution FAILED: %v", err)
 	} else {
 		e.log.Infof(ctx, "Post actions completed: %d/%d actions executed successfully", len(postResults), postActionCount)
@@ -178,27 +180,10 @@ func (e *Executor) Execute(ctx context.Context, data interface{}) *ExecutionResu
 	result.ExecutionContext = execCtx
 
 	if result.Status == StatusSuccess {
-		if result.ResourcesSkipped {
-			e.log.Infof(ctx, "Execution complete: status=success resources_skipped=true reason=%s", result.SkipReason)
-		} else {
-			e.log.Info(ctx, "Execution complete: status=success")
-		}
+		e.log.Infof(ctx, "Event execution finished: event_execution_status=success resources_skipped=%t reason=%s", result.ResourcesSkipped, result.SkipReason)
 	} else {
-		e.log.Errorf(ctx, "Execution complete: status=failed phase=%s reason=%s", result.Phase, result.ErrorReason)
+		e.log.Errorf(ctx, "Event execution finished: event_execution_status=failed event_execution_errors=%v", result.Errors)
 	}
-
-	return result
-}
-
-// finishWithError is a helper to handle early termination with error
-func (e *Executor) finishWithError(ctx context.Context, result *ExecutionResult, execCtx *ExecutionContext, err error, reason string) *ExecutionResult {
-	result.Status = StatusFailed
-	result.Error = err
-	result.ErrorReason = reason
-	result.ExecutionContext = execCtx
-	result.Params = execCtx.Params
-	e.log.Errorf(ctx, "Event execution failed: phase=%s reason=%s",
-		result.Phase, result.ErrorReason)
 	return result
 }
 
@@ -230,16 +215,11 @@ func (e *Executor) CreateHandler() func(ctx context.Context, evt *event.Event) e
 		e.log.Infof(ctx, "Event received: id=%s type=%s source=%s time=%s",
 			evt.ID(), evt.Type(), evt.Source(), evt.Time())
 
-		result := e.Execute(ctx, evt.Data())
+		_ = e.Execute(ctx, evt.Data())
 
-		// Log failure but ACK the message to prevent retry loops
-		// Non-recoverable errors (4xx, validation failures) should not be retried
-		if result.Status == StatusFailed {
-			e.log.Errorf(ctx, "Event processing failed (ACKing to prevent retry): phase=%s reason=%s error=%v",
-				result.Phase, result.ErrorReason, result.Error)
-		}
+		e.log.Infof(ctx, "Event processed: id=%s type=%s source=%s time=%s",
+			evt.ID(), evt.Type(), evt.Source(), evt.Time())
 
-		// StatusSkipped is not an error - preconditions not met is expected behavior
 		return nil
 	}
 }
