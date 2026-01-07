@@ -52,13 +52,12 @@ func (pae *PostActionExecutor) ExecuteAll(ctx context.Context, postConfig *confi
 
 	// Step 2: Execute post actions (sequential - stop on first failure)
 	results := make([]PostActionResult, 0, len(postConfig.PostActions))
-	for i, action := range postConfig.PostActions {
-		pae.log.Infof(ctx, "[PostAction %d/%d] Executing: %s", i+1, len(postConfig.PostActions), action.Name)
+	for _, action := range postConfig.PostActions {
 		result, err := pae.executePostAction(ctx, action, execCtx)
 		results = append(results, result)
 
 		if err != nil {
-			pae.log.Errorf(ctx, "[PostAction %d/%d] %s: FAILED - %v", i+1, len(postConfig.PostActions), action.Name, err)
+			pae.log.Errorf(ctx, "PostAction[%s] processed: FAILED - error=%v", action.Name, err)
 
 			// Set ExecutionError for failed post action
 			execCtx.Adapter.ExecutionError = &ExecutionError{
@@ -70,7 +69,7 @@ func (pae *PostActionExecutor) ExecuteAll(ctx context.Context, postConfig *confi
 			// Stop execution - don't run remaining post actions
 			return results, err
 		}
-		pae.log.Infof(ctx, "[PostAction %d/%d] %s: SUCCESS ✓", i+1, len(postConfig.PostActions), action.Name)
+		pae.log.Infof(ctx, "PostAction[%s] processed: SUCCESS - status=%s", action.Name, result.Status)
 	}
 
 	return results, nil
@@ -216,11 +215,11 @@ func (pae *PostActionExecutor) executePostAction(ctx context.Context, action con
 
 	// Execute API call if configured
 	if action.APICall != nil {
-		pae.log.Infof(ctx, "Making API call: %s %s", action.APICall.Method, action.APICall.URL)
+		pae.log.Debugf(ctx, "Making API call: %s %s", action.APICall.Method, action.APICall.URL)
 		if err := pae.executeAPICall(ctx, action.APICall, execCtx, &result); err != nil {
 			return result, err
 		}
-		pae.log.Infof(ctx, "API call successful: HTTP %d", result.HTTPStatus)
+		pae.log.Debugf(ctx, "API call completed: HTTP %d", result.HTTPStatus)
 	}
 
 	return result, nil

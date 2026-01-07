@@ -32,14 +32,13 @@ func newPreconditionExecutor(config *ExecutorConfig) *PreconditionExecutor {
 func (pe *PreconditionExecutor) ExecuteAll(ctx context.Context, preconditions []config_loader.Precondition, execCtx *ExecutionContext) *PreconditionsOutcome {
 	results := make([]PreconditionResult, 0, len(preconditions))
 
-	for i, precond := range preconditions {
-		pe.log.Infof(ctx, "[Precondition %d/%d] Evaluating: %s", i+1, len(preconditions), precond.Name)
+	for _, precond := range preconditions {
 		result, err := pe.executePrecondition(ctx, precond, execCtx)
 		results = append(results, result)
 
 		if err != nil {
 			// Execution error (API call failed, parse error, etc.)
-			pe.log.Errorf(ctx, "[Precondition %d/%d] %s: EXECUTION ERROR - %v", i+1, len(preconditions), precond.Name, err)
+			pe.log.Errorf(ctx, "Precondition[%s] evaluated: FAILED - error=%v", precond.Name, err)
 			return &PreconditionsOutcome{
 				AllMatched: false,
 				Results:    results,
@@ -49,7 +48,7 @@ func (pe *PreconditionExecutor) ExecuteAll(ctx context.Context, preconditions []
 
 		if !result.Matched {
 			// Business outcome: precondition not satisfied
-			pe.log.Infof(ctx, "[Precondition %d/%d] %s: NOT MET", i+1, len(preconditions), precond.Name)
+			pe.log.Infof(ctx, "Precondition[%s] evaluated: NOT_MET - %s", precond.Name, formatConditionDetails(result))
 			return &PreconditionsOutcome{
 				AllMatched:   false,
 				Results:      results,
@@ -58,7 +57,7 @@ func (pe *PreconditionExecutor) ExecuteAll(ctx context.Context, preconditions []
 			}
 		}
 
-		pe.log.Infof(ctx, "[Precondition %d/%d] %s: MET ✓", i+1, len(preconditions), precond.Name)
+		pe.log.Infof(ctx, "Precondition[%s] evaluated: MET", precond.Name)
 	}
 
 	// All preconditions matched
@@ -84,7 +83,7 @@ func (pe *PreconditionExecutor) executePrecondition(ctx context.Context, precond
 
 	// Step 2: Make API call if configured
 	if precond.APICall != nil {
-		pe.log.Infof(ctx, "Making API call: %s %s", precond.APICall.Method, precond.APICall.URL)
+		pe.log.Debugf(ctx, "Making API call: %s %s", precond.APICall.Method, precond.APICall.URL)
 		apiResult, err := pe.executeAPICall(ctx, precond.APICall, execCtx)
 		if err != nil {
 			result.Status = StatusFailed
@@ -124,7 +123,7 @@ func (pe *PreconditionExecutor) executePrecondition(ctx context.Context, precond
 
 		// Capture fields from response
 		if len(precond.Capture) > 0 {
-			pe.log.Infof(ctx, "Capturing %d fields from API response", len(precond.Capture))
+			pe.log.Debugf(ctx, "Capturing %d fields from API response", len(precond.Capture))
 
 			// Create evaluator with response data only
 			// Both field (JSONPath) and expression (CEL) work on the same source
@@ -151,7 +150,7 @@ func (pe *PreconditionExecutor) executePrecondition(ctx context.Context, precond
 				}
 			}
 		}
-		pe.log.Infof(ctx, "API call successful, response captured")
+		pe.log.Debugf(ctx, "API call completed, response captured")
 	}
 
 	// Step 3: Evaluate conditions
@@ -169,7 +168,7 @@ func (pe *PreconditionExecutor) executePrecondition(ctx context.Context, precond
 
 	// Evaluate using structured conditions or CEL expression
 	if len(precond.Conditions) > 0 {
-		pe.log.Infof(ctx, "Evaluating %d structured conditions", len(precond.Conditions))
+		pe.log.Debugf(ctx, "Evaluating %d structured conditions", len(precond.Conditions))
 		condDefs := ToConditionDefs(precond.Conditions)
 
 		condResult, err := evaluator.EvaluateConditions(condDefs)
@@ -185,9 +184,9 @@ func (pe *PreconditionExecutor) executePrecondition(ctx context.Context, precond
 		// Log individual condition results
 		for _, cr := range condResult.Results {
 			if cr.Matched {
-				pe.log.Debugf(ctx, "Condition: %s %s %v = %v ✓", cr.Field, cr.Operator, cr.ExpectedValue, cr.FieldValue)
+				pe.log.Debugf(ctx, "Condition: %s %s %v = %v (matched)", cr.Field, cr.Operator, cr.ExpectedValue, cr.FieldValue)
 			} else {
-				pe.log.Infof(ctx, "Condition FAILED: %s %s %v (actual: %v)", cr.Field, cr.Operator, cr.ExpectedValue, cr.FieldValue)
+				pe.log.Infof(ctx, "Condition[%s] evaluated: NOT_MET - %s %s %v (actual: %v)", precond.Name, cr.Field, cr.Operator, cr.ExpectedValue, cr.FieldValue)
 			}
 		}
 
@@ -199,8 +198,7 @@ func (pe *PreconditionExecutor) executePrecondition(ctx context.Context, precond
 		execCtx.AddConditionsEvaluation(PhasePreconditions, precond.Name, condResult.Matched, fieldResults)
 	} else if precond.Expression != "" {
 		// Evaluate CEL expression
-		pe.log.Infof(ctx, "Evaluating CEL expression")
-		pe.log.Debugf(ctx, "Expression: %s", strings.TrimSpace(precond.Expression))
+		pe.log.Debugf(ctx, "Evaluating CEL expression: %s", strings.TrimSpace(precond.Expression))
 		celResult, err := evaluator.EvaluateCEL(strings.TrimSpace(precond.Expression))
 		if err != nil {
 			result.Status = StatusFailed
@@ -210,13 +208,13 @@ func (pe *PreconditionExecutor) executePrecondition(ctx context.Context, precond
 
 		result.Matched = celResult.Matched
 		result.CELResult = celResult
-		pe.log.Infof(ctx, "CEL result: matched=%v value=%v", celResult.Matched, celResult.Value)
+		pe.log.Debugf(ctx, "CEL result: matched=%v value=%v", celResult.Matched, celResult.Value)
 
 		// Record CEL evaluation in execution context
 		execCtx.AddCELEvaluation(PhasePreconditions, precond.Name, precond.Expression, celResult.Matched)
 	} else {
 		// No conditions specified - consider it matched
-		pe.log.Infof(ctx, "No conditions specified, auto-matched")
+		pe.log.Debugf(ctx, "No conditions specified, auto-matched")
 		result.Matched = true
 	}
 

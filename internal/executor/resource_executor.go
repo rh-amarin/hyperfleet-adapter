@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mitchellh/copystructure"
@@ -38,17 +39,13 @@ func (re *ResourceExecutor) ExecuteAll(ctx context.Context, resources []config_l
 	}
 	results := make([]ResourceResult, 0, len(resources))
 
-	for i, resource := range resources {
-		re.log.Infof(ctx, "[Resource %d/%d] Processing: %s", i+1, len(resources), resource.Name)
+	for _, resource := range resources {
 		result, err := re.executeResource(ctx, resource, execCtx)
 		results = append(results, result)
 
 		if err != nil {
-			re.log.Errorf(ctx, "[Resource %d/%d] %s: FAILED - %v", i+1, len(resources), resource.Name, err)
 			return results, err
 		}
-		re.log.Infof(ctx, "[Resource %d/%d] %s: %s %s/%s (operation: %s) ✓",
-			i+1, len(resources), resource.Name, result.Kind, result.Namespace, result.ResourceName, result.Operation)
 	}
 
 	return results, nil
@@ -76,8 +73,7 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 	result.Namespace = manifest.GetNamespace()
 	result.ResourceName = manifest.GetName()
 
-	re.log.Infof(ctx, "Manifest: %s/%s %s (namespace: %s)",
-		gvk.Group, gvk.Kind, manifest.GetName(), manifest.GetNamespace())
+	re.log.Infof(ctx, "Resource[%s] manifest built: kind=%s name=%s namespace=%s", resource.Name, gvk.Kind, manifest.GetName(), manifest.GetNamespace())
 
 	// Step 2: Check for existing resource using discovery
 	var existingResource *unstructured.Unstructured
@@ -96,13 +92,13 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 			}
 		}
 		if existingResource != nil {
-			re.log.Infof(ctx, "Existing resource found: %s/%s", existingResource.GetNamespace(), existingResource.GetName())
+			re.log.Debugf(ctx, "Existing resource found: %s/%s", existingResource.GetNamespace(), existingResource.GetName())
 		} else {
-			re.log.Infof(ctx, "No existing resource found, will create")
+			re.log.Debugf(ctx, "No existing resource found, will create")
 		}
 	}
 
-	// Step 3: Perform the appropriate operation
+	// Step 3: Determine and perform the appropriate operation
 	if existingResource != nil {
 		// Check if generation annotations match - skip update if unchanged
 		existingGen := k8s_client.GetGenerationAnnotation(existingResource)
@@ -112,27 +108,39 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 			// Generations match - no action needed
 			result.Operation = OperationSkip
 			result.Resource = existingResource
-			re.log.Infof(ctx, "Operation: SKIP (generation %d unchanged)", existingGen)
+			result.OperationReason = fmt.Sprintf("generation %d unchanged", existingGen)
 		} else {
 			// Generations do not match - perform the appropriate action
-			// resource management is further feature. Current update and recreate is a placeholder for temporary use.
 			if resource.RecreateOnChange {
 				result.Operation = OperationRecreate
-				re.log.Infof(ctx, "Operation: RECREATE (recreateOnChange=true)")
-				result.Resource, err = re.recreateResource(ctx, existingResource, manifest)
+				result.OperationReason = fmt.Sprintf("generation changed %d->%d, recreateOnChange=true", existingGen, manifestGen)
 			} else {
 				result.Operation = OperationUpdate
-				re.log.Infof(ctx, "Operation: UPDATE")
-				result.Resource, err = re.updateResource(ctx, existingResource, manifest)
+				result.OperationReason = fmt.Sprintf("generation changed %d->%d", existingGen, manifestGen)
 			}
 		}
 	} else {
 		// Create new resource
 		result.Operation = OperationCreate
-		re.log.Infof(ctx, "Operation: CREATE")
-		result.Resource, err = re.createResource(ctx, manifest)
+		result.OperationReason = "resource not found"
 	}
 
+	// Log the operation decision
+	re.log.Infof(ctx, "Resource[%s] is processing: operation=%s kind=%s name=%s reason=%s",
+	resource.Name, strings.ToUpper(string(result.Operation)), gvk.Kind, manifest.GetName(), result.OperationReason)
+
+	// Execute the operation
+	switch result.Operation {
+	case OperationCreate:
+		result.Resource, err = re.createResource(ctx, manifest)
+	case OperationUpdate:
+		result.Resource, err = re.updateResource(ctx, existingResource, manifest)
+	case OperationRecreate:
+		result.Resource, err = re.recreateResource(ctx, existingResource, manifest)
+	case OperationSkip:
+		// No action needed, resource already set above
+	}
+	
 	if err != nil {
 		result.Status = StatusFailed
 		result.Error = err
@@ -142,9 +150,13 @@ func (re *ResourceExecutor) executeResource(ctx context.Context, resource config
 			Step:    resource.Name,
 			Message: err.Error(),
 		}
+		re.log.Errorf(ctx, "Resource[%s] processed: FAILED - operation=%s reason=%s kind=%s name=%s error=%v", 
+			resource.Name, result.Operation, result.OperationReason, gvk.Kind, manifest.GetName(), err)
 		return result, NewExecutorError(PhaseResources, resource.Name,
 			fmt.Sprintf("failed to %s resource", result.Operation), err)
 	}
+	re.log.Infof(ctx, "Resource[%s] processed: SUCCESS - operation=%s reason=%s kind=%s name=%s", 
+		resource.Name, result.Operation, result.OperationReason, gvk.Kind, manifest.GetName())
 
 	// Store resource in execution context
 	if result.Resource != nil {

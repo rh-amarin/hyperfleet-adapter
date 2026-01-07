@@ -136,6 +136,9 @@ type ResourceResult struct {
 	Operation ResourceOperation
 	// Resource is the created/updated resource (if successful)
 	Resource *unstructured.Unstructured
+	// OperationReason explains why this operation was performed
+	// Examples: "resource not found", "generation changed from 1 to 2", "generation 1 unchanged", "recreateOnChange=true"
+	OperationReason string
 	// Error is the error if Status is StatusFailed
 	Error error
 }
