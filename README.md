@@ -118,6 +118,31 @@ hyperfleet-adapter/
 
 💡 **Tip:** Use `make help` to see all available targets with descriptions
 
+### Tool Dependency Management (Bingo)
+
+HyperFleet Adapter uses [bingo](https://github.com/bwplotka/bingo) to manage Go tool dependencies with pinned versions.
+
+**Managed tools**:
+- `goimports` - Code formatting and import organization
+- `golangci-lint` - Code linting
+
+**Common operations**:
+```bash
+# Install all tools
+bingo get
+
+# Install a specific tool
+bingo get <tool>
+
+# Update a tool to latest version
+bingo get <tool>@latest
+
+# List all managed tools
+bingo list
+```
+
+Tool versions are tracked in `.bingo/*.mod` files and loaded automatically via `include .bingo/Variables.mk` in the Makefile.
+
 ### Configuration
 
 The adapter supports multiple configuration sources with the following priority order:
