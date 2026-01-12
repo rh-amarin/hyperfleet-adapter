@@ -17,12 +17,13 @@ DEV_TAG ?= dev-$(GIT_COMMIT)
 BUILD_DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 
 # LDFLAGS for build
+# Note: Variables are in package main, so use main.varName (not full import path)
 LDFLAGS := -w -s
-LDFLAGS += -X github.com/openshift-hyperfleet/hyperfleet-adapter/cmd/adapter.version=$(VERSION)
-LDFLAGS += -X github.com/openshift-hyperfleet/hyperfleet-adapter/cmd/adapter.commit=$(GIT_COMMIT)
-LDFLAGS += -X github.com/openshift-hyperfleet/hyperfleet-adapter/cmd/adapter.buildDate=$(BUILD_DATE)
+LDFLAGS += -X main.version=$(VERSION)
+LDFLAGS += -X main.commit=$(GIT_COMMIT)
+LDFLAGS += -X main.buildDate=$(BUILD_DATE)
 ifneq ($(GIT_TAG),)
-LDFLAGS += -X github.com/openshift-hyperfleet/hyperfleet-adapter/cmd/adapter.tag=$(GIT_TAG)
+LDFLAGS += -X main.tag=$(GIT_TAG)
 endif
 
 # Go parameters
