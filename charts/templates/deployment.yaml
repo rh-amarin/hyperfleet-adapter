@@ -182,11 +182,21 @@ spec:
               path: /healthz
               port: http
             {{- end }}
-            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds | default 30 }}
-            periodSeconds: {{ .Values.livenessProbe.periodSeconds | default 10 }}
-            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds | default 5 }}
-            failureThreshold: {{ .Values.livenessProbe.failureThreshold | default 3 }}
-            successThreshold: {{ .Values.livenessProbe.successThreshold | default 1 }}
+            {{- with .Values.livenessProbe.initialDelaySeconds }}
+            initialDelaySeconds: {{ . }}
+            {{- end }}
+            {{- with .Values.livenessProbe.periodSeconds }}
+            periodSeconds: {{ . }}
+            {{- end }}
+            {{- with .Values.livenessProbe.timeoutSeconds }}
+            timeoutSeconds: {{ . }}
+            {{- end }}
+            {{- with .Values.livenessProbe.failureThreshold }}
+            failureThreshold: {{ . }}
+            {{- end }}
+            {{- with .Values.livenessProbe.successThreshold }}
+            successThreshold: {{ . }}
+            {{- end }}
           {{- end }}
           {{- if .Values.readinessProbe.enabled }}
           readinessProbe:
@@ -209,11 +219,21 @@ spec:
               path: /readyz
               port: http
             {{- end }}
-            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 5 }}
-            periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 5 }}
-            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 3 }}
-            failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
-            successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
+            {{- with .Values.readinessProbe.initialDelaySeconds }}
+            initialDelaySeconds: {{ . }}
+            {{- end }}
+            {{- with .Values.readinessProbe.periodSeconds }}
+            periodSeconds: {{ . }}
+            {{- end }}
+            {{- with .Values.readinessProbe.timeoutSeconds }}
+            timeoutSeconds: {{ . }}
+            {{- end }}
+            {{- with .Values.readinessProbe.failureThreshold }}
+            failureThreshold: {{ . }}
+            {{- end }}
+            {{- with .Values.readinessProbe.successThreshold }}
+            successThreshold: {{ . }}
+            {{- end }}
           {{- end }}
           {{- if .Values.startupProbe.enabled }}
           startupProbe:
@@ -236,11 +256,21 @@ spec:
               path: /healthz
               port: http
             {{- end }}
-            initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds | default 10 }}
-            periodSeconds: {{ .Values.startupProbe.periodSeconds | default 10 }}
-            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds | default 5 }}
-            failureThreshold: {{ .Values.startupProbe.failureThreshold | default 30 }}
-            successThreshold: {{ .Values.startupProbe.successThreshold | default 1 }}
+            {{- with .Values.startupProbe.initialDelaySeconds }}
+            initialDelaySeconds: {{ . }}
+            {{- end }}
+            {{- with .Values.startupProbe.periodSeconds }}
+            periodSeconds: {{ . }}
+            {{- end }}
+            {{- with .Values.startupProbe.timeoutSeconds }}
+            timeoutSeconds: {{ . }}
+            {{- end }}
+            {{- with .Values.startupProbe.failureThreshold }}
+            failureThreshold: {{ . }}
+            {{- end }}
+            {{- with .Values.startupProbe.successThreshold }}
+            successThreshold: {{ . }}
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

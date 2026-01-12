@@ -33,15 +33,14 @@ minReadySeconds: 0
 # The number of old ReplicaSets to retain for rollback
 revisionHistoryLimit: 10
 
-# Container ports (optional, only needed if adapter exposes HTTP endpoints)
-# Set to empty if no ports are needed
-containerPorts: []
-  # - name: http
-  #   containerPort: 8080
-  #   protocol: TCP
-  # - name: metrics
-  #   containerPort: 9090
-  #   protocol: TCP
+# Container ports for health and metrics endpoints
+containerPorts:
+  - name: http
+    containerPort: 8080
+    protocol: TCP
+  - name: metrics
+    containerPort: 9090
+    protocol: TCP
 
 # Override default command
 command:
@@ -86,44 +85,29 @@ resources:
     cpu: 100m
     memory: 128Mi
 
-# Liveness probe configuration
-# Disabled by default - adapter doesn't expose HTTP health endpoints
-# Enable and configure if you add health endpoints to the adapter
+# Liveness probe configuration (per HyperFleet health-endpoints standard)
+# Uses K8s defaults: initialDelaySeconds=0, periodSeconds=10, timeoutSeconds=1, failureThreshold=3
 livenessProbe:
-  enabled: false
-  # httpGet:
-  #   path: /healthz
-  #   port: 8080
-  # initialDelaySeconds: 30
-  # periodSeconds: 10
-  # timeoutSeconds: 5
-  # failureThreshold: 3
-  # successThreshold: 1
+  enabled: true
+  httpGet:
+    path: /healthz
+    port: 8080
 
-# Readiness probe configuration
-# Disabled by default - adapter doesn't expose HTTP health endpoints
+# Readiness probe configuration (per HyperFleet health-endpoints standard)
+# Uses K8s defaults: initialDelaySeconds=0, periodSeconds=10, timeoutSeconds=1, failureThreshold=3
 readinessProbe:
-  enabled: false
-  # httpGet:
-  #   path: /readyz
-  #   port: 8080
-  # initialDelaySeconds: 5
-  # periodSeconds: 5
-  # timeoutSeconds: 3
-  # failureThreshold: 3
-  # successThreshold: 1
+  enabled: true
+  httpGet:
+    path: /readyz
+    port: 8080
 
 # Startup probe configuration (useful for slow-starting containers)
+# Uses K8s defaults when enabled
 startupProbe:
   enabled: false
-  # httpGet:
-  #   path: /healthz
-  #   port: 8080
-  # initialDelaySeconds: 10
-  # periodSeconds: 10
-  # timeoutSeconds: 5
-  # failureThreshold: 30
-  # successThreshold: 1
+  httpGet:
+    path: /healthz
+    port: 8080
 
 # Lifecycle hooks
 lifecycle: {}

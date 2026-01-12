@@ -13,6 +13,7 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/executor"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/health"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/otel"
 	"github.com/openshift-hyperfleet/hyperfleet-broker/broker"
@@ -46,6 +47,16 @@ const (
 const (
 	// OTelShutdownTimeout is the timeout for gracefully shutting down the OpenTelemetry TracerProvider
 	OTelShutdownTimeout = 5 * time.Second
+	// HealthServerShutdownTimeout is the timeout for gracefully shutting down the health server
+	HealthServerShutdownTimeout = 5 * time.Second
+)
+
+// Server port constants
+const (
+	// HealthServerPort is the port for /healthz and /readyz endpoints
+	HealthServerPort = "8080"
+	// MetricsServerPort is the port for /metrics endpoint
+	MetricsServerPort = "9090"
 )
 
 func main() {
@@ -191,6 +202,44 @@ func runServe() error {
 		}
 	}()
 
+	// Start health server immediately (readiness starts as false)
+	healthServer := health.NewServer(log, HealthServerPort, adapterConfig.Metadata.Name)
+	if err := healthServer.Start(ctx); err != nil {
+		errCtx := logger.WithErrorField(ctx, err)
+		log.Errorf(errCtx, "Failed to start health server")
+		return fmt.Errorf("failed to start health server: %w", err)
+	}
+	// Mark config as loaded since we got here successfully
+	healthServer.SetConfigLoaded()
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), HealthServerShutdownTimeout)
+		defer shutdownCancel()
+		if err := healthServer.Shutdown(shutdownCtx); err != nil {
+			errCtx := logger.WithErrorField(shutdownCtx, err)
+			log.Warnf(errCtx, "Failed to shutdown health server")
+		}
+	}()
+
+	// Start metrics server with build info
+	metricsServer := health.NewMetricsServer(log, MetricsServerPort, health.MetricsConfig{
+		Component: adapterConfig.Metadata.Name,
+		Version:   version,
+		Commit:    commit,
+	})
+	if err := metricsServer.Start(ctx); err != nil {
+		errCtx := logger.WithErrorField(ctx, err)
+		log.Errorf(errCtx, "Failed to start metrics server")
+		return fmt.Errorf("failed to start metrics server: %w", err)
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), HealthServerShutdownTimeout)
+		defer shutdownCancel()
+		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+			errCtx := logger.WithErrorField(shutdownCtx, err)
+			log.Warnf(errCtx, "Failed to shutdown metrics server")
+		}
+	}()
+
 	// Create HyperFleet API client from config
 	log.Info(ctx, "Creating HyperFleet API client...")
 	apiClient, err := createAPIClient(adapterConfig.Spec.HyperfleetAPI, log)
@@ -238,6 +287,10 @@ func runServe() error {
 	go func() {
 		sig := <-sigCh
 		log.Infof(ctx, "Received signal %s, initiating graceful shutdown...", sig)
+		// Mark as not ready immediately per HyperFleet Graceful Shutdown Standard
+		// This must happen BEFORE context cancellation to ensure /readyz returns 503
+		log.Info(ctx, "Shutdown initiated, marking not ready")
+		healthServer.SetShuttingDown(true)
 		cancel()
 
 		// Second signal forces immediate exit
@@ -289,6 +342,10 @@ func runServe() error {
 	}
 	log.Info(ctx, "Successfully subscribed to broker topic")
 
+	// Mark as ready now that broker subscription is established
+	healthServer.SetBrokerReady(true)
+	log.Info(ctx, "Adapter is ready to process events")
+
 	// Channel to signal fatal errors from the errors goroutine
 	fatalErrCh := make(chan error, 1)
 
@@ -320,6 +377,8 @@ func runServe() error {
 	case err := <-fatalErrCh:
 		errCtx := logger.WithErrorField(ctx, err)
 		log.Errorf(errCtx, "Fatal subscription error, shutting down")
+		// Mark as not ready before shutdown per HyperFleet Graceful Shutdown Standard
+		healthServer.SetShuttingDown(true)
 		cancel() // Cancel context to trigger graceful shutdown
 	}
 
