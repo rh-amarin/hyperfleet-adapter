@@ -1,3 +1,5 @@
+ARG BASE_IMAGE=gcr.io/distroless/static-debian12:nonroot
+
 # Build stage
 FROM golang:1.25-alpine AS builder
 
@@ -13,7 +15,7 @@ RUN go mod tidy && go mod verify
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o adapter ./cmd/adapter
 
 # Runtime stage
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
