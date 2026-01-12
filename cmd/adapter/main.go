@@ -343,7 +343,7 @@ func runServe() error {
 	log.Info(ctx, "Successfully subscribed to broker topic")
 
 	// Mark as ready now that broker subscription is established
-	healthServer.SetReady(true)
+	healthServer.SetBrokerReady(true)
 	log.Info(ctx, "Adapter is ready to process events")
 
 	// Channel to signal fatal errors from the errors goroutine

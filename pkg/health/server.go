@@ -102,9 +102,8 @@ func (s *Server) SetCheck(name string, status CheckStatus) {
 	s.checks[name] = status
 }
 
-// SetReady is a convenience method that sets the broker check status.
-// Kept for backward compatibility.
-func (s *Server) SetReady(ready bool) {
+// SetBrokerReady sets the broker check status.
+func (s *Server) SetBrokerReady(ready bool) {
 	if ready {
 		s.SetCheck("broker", CheckOK)
 	} else {

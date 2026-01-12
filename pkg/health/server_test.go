@@ -78,7 +78,7 @@ func TestReadyzHandler_NotReady(t *testing.T) {
 func TestReadyzHandler_Ready(t *testing.T) {
 	server := NewServer(&mockLogger{}, "8080", "test-adapter")
 	server.SetConfigLoaded()
-	server.SetReady(true)
+	server.SetBrokerReady(true)
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
@@ -101,7 +101,7 @@ func TestReadyzHandler_Ready(t *testing.T) {
 	assert.Equal(t, CheckOK, response.Checks["broker"])
 }
 
-func TestSetReady(t *testing.T) {
+func TestSetBrokerReady(t *testing.T) {
 	server := NewServer(&mockLogger{}, "8080", "test-adapter")
 
 	// Initially not ready (both checks are error)
@@ -112,11 +112,11 @@ func TestSetReady(t *testing.T) {
 	assert.False(t, server.IsReady()) // Still not ready, broker is error
 
 	// Set broker ready
-	server.SetReady(true)
+	server.SetBrokerReady(true)
 	assert.True(t, server.IsReady()) // Now ready
 
 	// Set broker not ready again
-	server.SetReady(false)
+	server.SetBrokerReady(false)
 	assert.False(t, server.IsReady())
 }
 
@@ -126,7 +126,7 @@ func TestSetCheck(t *testing.T) {
 	// Set a custom check
 	server.SetCheck("custom", CheckOK)
 	server.SetConfigLoaded()
-	server.SetReady(true)
+	server.SetBrokerReady(true)
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
@@ -172,7 +172,7 @@ func TestReadyzHandler_ReadyToNotReady(t *testing.T) {
 
 	// Set all checks to ok
 	server.SetConfigLoaded()
-	server.SetReady(true)
+	server.SetBrokerReady(true)
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
@@ -180,7 +180,7 @@ func TestReadyzHandler_ReadyToNotReady(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 
 	// Set not ready (simulating shutdown)
-	server.SetReady(false)
+	server.SetBrokerReady(false)
 
 	req = httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w = httptest.NewRecorder()
@@ -218,7 +218,7 @@ func TestReadyzHandler_ShuttingDown(t *testing.T) {
 
 	// Set all checks to ok (server is ready)
 	server.SetConfigLoaded()
-	server.SetReady(true)
+	server.SetBrokerReady(true)
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
@@ -252,7 +252,7 @@ func TestIsReady_ShuttingDown(t *testing.T) {
 
 	// Set all checks to ok
 	server.SetConfigLoaded()
-	server.SetReady(true)
+	server.SetBrokerReady(true)
 	assert.True(t, server.IsReady())
 
 	// Set shutting down - should override checks
@@ -265,7 +265,7 @@ func TestReadyzHandler_ShuttingDownPriority(t *testing.T) {
 
 	// Set all checks to ok
 	server.SetConfigLoaded()
-	server.SetReady(true)
+	server.SetBrokerReady(true)
 
 	// Set shutting down first, then check response
 	server.SetShuttingDown(true)
@@ -352,7 +352,7 @@ func TestServerLifecycle_ReadyzWhileRunning(t *testing.T) {
 
 	// Set checks to ok
 	server.SetConfigLoaded()
-	server.SetReady(true)
+	server.SetBrokerReady(true)
 	assert.True(t, server.IsReady())
 
 	resp2, err := http.Get("http://localhost:" + port + "/readyz")
@@ -381,7 +381,7 @@ func TestServerLifecycle_GracefulShutdownStateTransitions(t *testing.T) {
 
 	// Set server to ready state
 	server.SetConfigLoaded()
-	server.SetReady(true)
+	server.SetBrokerReady(true)
 
 	// Verify initial state
 	assert.True(t, server.IsReady())
