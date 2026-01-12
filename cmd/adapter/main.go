@@ -209,6 +209,8 @@ func runServe() error {
 		log.Errorf(errCtx, "Failed to start health server")
 		return fmt.Errorf("failed to start health server: %w", err)
 	}
+	// Mark config as loaded since we got here successfully
+	healthServer.SetConfigLoaded()
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), HealthServerShutdownTimeout)
 		defer shutdownCancel()
@@ -218,8 +220,12 @@ func runServe() error {
 		}
 	}()
 
-	// Start metrics server
-	metricsServer := health.NewMetricsServer(log, MetricsServerPort)
+	// Start metrics server with build info
+	metricsServer := health.NewMetricsServer(log, MetricsServerPort, health.MetricsConfig{
+		Component: adapterConfig.Metadata.Name,
+		Version:   version,
+		Commit:    commit,
+	})
 	if err := metricsServer.Start(ctx); err != nil {
 		errCtx := logger.WithErrorField(ctx, err)
 		log.Errorf(errCtx, "Failed to start metrics server")

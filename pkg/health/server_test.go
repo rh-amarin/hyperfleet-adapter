@@ -42,7 +42,7 @@ func TestHealthzHandler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
 
-	var response Response
+	var response HealthResponse
 	err := json.NewDecoder(resp.Body).Decode(&response)
 	require.NoError(t, err)
 	assert.Equal(t, "ok", response.Status)
@@ -51,7 +51,7 @@ func TestHealthzHandler(t *testing.T) {
 
 func TestReadyzHandler_NotReady(t *testing.T) {
 	server := NewServer(&mockLogger{}, "8080", "test-adapter")
-	// By default, ready is false
+	// By default, checks are in error state
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
@@ -64,15 +64,19 @@ func TestReadyzHandler_NotReady(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
 
-	var response Response
+	var response ReadyResponse
 	err := json.NewDecoder(resp.Body).Decode(&response)
 	require.NoError(t, err)
 	assert.Equal(t, "error", response.Status)
 	assert.Equal(t, "not ready", response.Message)
+	assert.NotNil(t, response.Checks)
+	assert.Equal(t, CheckError, response.Checks["config"])
+	assert.Equal(t, CheckError, response.Checks["broker"])
 }
 
 func TestReadyzHandler_Ready(t *testing.T) {
 	server := NewServer(&mockLogger{}, "8080", "test-adapter")
+	server.SetConfigLoaded()
 	server.SetReady(true)
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -86,32 +90,87 @@ func TestReadyzHandler_Ready(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
 
-	var response Response
+	var response ReadyResponse
 	err := json.NewDecoder(resp.Body).Decode(&response)
 	require.NoError(t, err)
 	assert.Equal(t, "ok", response.Status)
 	assert.Empty(t, response.Message)
+	assert.NotNil(t, response.Checks)
+	assert.Equal(t, CheckOK, response.Checks["config"])
+	assert.Equal(t, CheckOK, response.Checks["broker"])
 }
 
 func TestSetReady(t *testing.T) {
 	server := NewServer(&mockLogger{}, "8080", "test-adapter")
 
-	// Initially not ready
+	// Initially not ready (both checks are error)
 	assert.False(t, server.IsReady())
 
-	// Set ready
-	server.SetReady(true)
-	assert.True(t, server.IsReady())
+	// Set config loaded
+	server.SetConfigLoaded()
+	assert.False(t, server.IsReady()) // Still not ready, broker is error
 
-	// Set not ready again
+	// Set broker ready
+	server.SetReady(true)
+	assert.True(t, server.IsReady()) // Now ready
+
+	// Set broker not ready again
 	server.SetReady(false)
 	assert.False(t, server.IsReady())
+}
+
+func TestSetCheck(t *testing.T) {
+	server := NewServer(&mockLogger{}, "8080", "test-adapter")
+
+	// Set a custom check
+	server.SetCheck("custom", CheckOK)
+	server.SetConfigLoaded()
+	server.SetReady(true)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+	server.readyzHandler(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	var response ReadyResponse
+	err := json.NewDecoder(resp.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.Equal(t, "ok", response.Status)
+	assert.Equal(t, CheckOK, response.Checks["custom"])
+	assert.Equal(t, CheckOK, response.Checks["config"])
+	assert.Equal(t, CheckOK, response.Checks["broker"])
+}
+
+func TestReadyzHandler_PartialReady(t *testing.T) {
+	server := NewServer(&mockLogger{}, "8080", "test-adapter")
+
+	// Only config is loaded, broker is not ready
+	server.SetConfigLoaded()
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+	server.readyzHandler(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+	var response ReadyResponse
+	err := json.NewDecoder(resp.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.Equal(t, "error", response.Status)
+	assert.Equal(t, CheckOK, response.Checks["config"])
+	assert.Equal(t, CheckError, response.Checks["broker"])
 }
 
 func TestReadyzHandler_ReadyToNotReady(t *testing.T) {
 	server := NewServer(&mockLogger{}, "8080", "test-adapter")
 
-	// Set ready first
+	// Set all checks to ok
+	server.SetConfigLoaded()
 	server.SetReady(true)
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -126,4 +185,10 @@ func TestReadyzHandler_ReadyToNotReady(t *testing.T) {
 	w = httptest.NewRecorder()
 	server.readyzHandler(w, req)
 	assert.Equal(t, http.StatusServiceUnavailable, w.Result().StatusCode)
+
+	var response ReadyResponse
+	err := json.NewDecoder(w.Result().Body).Decode(&response)
+	require.NoError(t, err)
+	assert.Equal(t, CheckOK, response.Checks["config"])  // Config stays ok
+	assert.Equal(t, CheckError, response.Checks["broker"]) // Broker is error
 }

@@ -4,25 +4,44 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 )
 
-// Response represents the JSON response for health endpoints.
-type Response struct {
+// CheckStatus represents the status of a single health check.
+type CheckStatus string
+
+const (
+	// CheckOK indicates the check passed.
+	CheckOK CheckStatus = "ok"
+	// CheckError indicates the check failed.
+	CheckError CheckStatus = "error"
+)
+
+// HealthResponse represents the JSON response for /healthz endpoint.
+type HealthResponse struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
+}
+
+// ReadyResponse represents the JSON response for /readyz endpoint per HyperFleet standard.
+type ReadyResponse struct {
+	Status  string                 `json:"status"`
+	Message string                 `json:"message,omitempty"`
+	Checks  map[string]CheckStatus `json:"checks,omitempty"`
 }
 
 // Server provides HTTP health check endpoints.
 type Server struct {
 	server    *http.Server
-	ready     atomic.Bool
 	log       logger.Logger
 	port      string
 	component string
+
+	mu     sync.RWMutex
+	checks map[string]CheckStatus
 }
 
 // NewServer creates a new health check server.
@@ -31,6 +50,10 @@ func NewServer(log logger.Logger, port string, component string) *Server {
 		log:       log,
 		port:      port,
 		component: component,
+		checks: map[string]CheckStatus{
+			"config": CheckError,
+			"broker": CheckError,
+		},
 	}
 
 	mux := http.NewServeMux()
@@ -66,14 +89,39 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
 }
 
-// SetReady marks the server as ready to accept traffic.
-func (s *Server) SetReady(ready bool) {
-	s.ready.Store(ready)
+// SetCheck sets the status of a specific health check.
+func (s *Server) SetCheck(name string, status CheckStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checks[name] = status
 }
 
-// IsReady returns the current readiness state.
+// SetReady is a convenience method that sets the broker check status.
+// Kept for backward compatibility.
+func (s *Server) SetReady(ready bool) {
+	if ready {
+		s.SetCheck("broker", CheckOK)
+	} else {
+		s.SetCheck("broker", CheckError)
+	}
+}
+
+// SetConfigLoaded marks the config check as ok.
+func (s *Server) SetConfigLoaded() {
+	s.SetCheck("config", CheckOK)
+}
+
+// IsReady returns true if all checks are passing.
 func (s *Server) IsReady() bool {
-	return s.ready.Load()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, status := range s.checks {
+		if status != CheckOK {
+			return false
+		}
+	}
+	return true
 }
 
 // healthzHandler handles liveness probe requests.
@@ -81,24 +129,39 @@ func (s *Server) IsReady() bool {
 func (s *Server) healthzHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(Response{Status: "ok"})
+	json.NewEncoder(w).Encode(HealthResponse{Status: "ok"})
 }
 
 // readyzHandler handles readiness probe requests.
-// Returns 200 OK if the server is ready to accept traffic,
+// Returns 200 OK with detailed checks if all checks pass,
 // 503 Service Unavailable otherwise.
 func (s *Server) readyzHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if s.ready.Load() {
+	s.mu.RLock()
+	checks := make(map[string]CheckStatus, len(s.checks))
+	allOK := true
+	for name, status := range s.checks {
+		checks[name] = status
+		if status != CheckOK {
+			allOK = false
+		}
+	}
+	s.mu.RUnlock()
+
+	if allOK {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(Response{Status: "ok"})
+		json.NewEncoder(w).Encode(ReadyResponse{
+			Status: "ok",
+			Checks: checks,
+		})
 		return
 	}
 
 	w.WriteHeader(http.StatusServiceUnavailable)
-	json.NewEncoder(w).Encode(Response{
+	json.NewEncoder(w).Encode(ReadyResponse{
 		Status:  "error",
 		Message: "not ready",
+		Checks:  checks,
 	})
 }

@@ -85,26 +85,26 @@ resources:
     cpu: 100m
     memory: 128Mi
 
-# Liveness probe configuration
+# Liveness probe configuration (per HyperFleet health-endpoints standard)
 livenessProbe:
   enabled: true
   httpGet:
     path: /healthz
     port: 8080
-  initialDelaySeconds: 30
-  periodSeconds: 10
+  initialDelaySeconds: 15
+  periodSeconds: 20
   timeoutSeconds: 5
   failureThreshold: 3
   successThreshold: 1
 
-# Readiness probe configuration
+# Readiness probe configuration (per HyperFleet health-endpoints standard)
 readinessProbe:
   enabled: true
   httpGet:
     path: /readyz
     port: 8080
   initialDelaySeconds: 5
-  periodSeconds: 5
+  periodSeconds: 10
   timeoutSeconds: 3
   failureThreshold: 3
   successThreshold: 1
