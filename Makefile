@@ -200,7 +200,7 @@ ifeq ($(CONTAINER_RUNTIME),none)
 	@exit 1
 else
 	@echo "Building dev image quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG)..."
-	$(CONTAINER_CMD) build --platform linux/amd64 -t quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG) .
+	$(CONTAINER_CMD) build --platform linux/amd64 --build-arg BASE_IMAGE=alpine:3.21 -t quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG) .
 	@echo "Pushing dev image..."
 	$(CONTAINER_CMD) push quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG)
 	@echo ""
