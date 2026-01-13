@@ -203,6 +203,12 @@ QUAY_USER=myuser make image-dev
 
 Default image: `quay.io/openshift-hyperfleet/hyperfleet-adapter:latest`
 
+The container build automatically embeds version metadata (version, git commit, build date) into the binary. The git commit is passed from the build machine via `--build-arg GIT_COMMIT`. To override:
+
+```bash
+make image GIT_COMMIT=abc1234
+```
+
 ## Testing
 
 ### Unit Tests
