@@ -17,12 +17,13 @@ DEV_TAG ?= dev-$(GIT_COMMIT)
 BUILD_DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 
 # LDFLAGS for build
+# Note: Variables are in package main, so use main.varName (not full import path)
 LDFLAGS := -w -s
-LDFLAGS += -X github.com/openshift-hyperfleet/hyperfleet-adapter/cmd/adapter.version=$(VERSION)
-LDFLAGS += -X github.com/openshift-hyperfleet/hyperfleet-adapter/cmd/adapter.commit=$(GIT_COMMIT)
-LDFLAGS += -X github.com/openshift-hyperfleet/hyperfleet-adapter/cmd/adapter.buildDate=$(BUILD_DATE)
+LDFLAGS += -X main.version=$(VERSION)
+LDFLAGS += -X main.commit=$(GIT_COMMIT)
+LDFLAGS += -X main.buildDate=$(BUILD_DATE)
 ifneq ($(GIT_TAG),)
-LDFLAGS += -X github.com/openshift-hyperfleet/hyperfleet-adapter/cmd/adapter.tag=$(GIT_TAG)
+LDFLAGS += -X main.tag=$(GIT_TAG)
 endif
 
 # Go parameters
@@ -168,7 +169,7 @@ ifeq ($(CONTAINER_RUNTIME),none)
 	@exit 1
 else
 	@echo "Building container image with $(CONTAINER_RUNTIME)..."
-	$(CONTAINER_CMD) build --platform linux/amd64 --no-cache -t $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG) .
+	$(CONTAINER_CMD) build --platform linux/amd64 --no-cache --build-arg GIT_COMMIT=$(GIT_COMMIT) -t $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG) .
 	@echo "✅ Image built: $(IMAGE_REGISTRY)/$(PROJECT_NAME):$(IMAGE_TAG)"
 endif
 
@@ -200,7 +201,7 @@ ifeq ($(CONTAINER_RUNTIME),none)
 	@exit 1
 else
 	@echo "Building dev image quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG)..."
-	$(CONTAINER_CMD) build --platform linux/amd64 --build-arg BASE_IMAGE=alpine:3.21 -t quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG) .
+	$(CONTAINER_CMD) build --platform linux/amd64 --build-arg BASE_IMAGE=alpine:3.21 --build-arg GIT_COMMIT=$(GIT_COMMIT) -t quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG) .
 	@echo "Pushing dev image..."
 	$(CONTAINER_CMD) push quay.io/$(QUAY_USER)/$(PROJECT_NAME):$(DEV_TAG)
 	@echo ""
