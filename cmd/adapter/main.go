@@ -10,9 +10,10 @@ import (
 	"time"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/config_loader"
-	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/executor"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/swf/loader"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/swf/runner"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/health"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/otel"
@@ -161,33 +162,57 @@ func runServe() error {
 
 	log.Infof(ctx, "Starting Hyperfleet Adapter version=%s commit=%s built=%s tag=%s", version, commit, buildDate, tag)
 
-	// Load adapter configuration
-	// If configPath flag is empty, config_loader.Load will read from ADAPTER_CONFIG_PATH env var
-	log.Info(ctx, "Loading adapter configuration...")
-	adapterConfig, err := config_loader.Load(configPath, config_loader.WithAdapterVersion(version))
+	// Load workflow configuration (supports both AdapterConfig and native SWF formats)
+	// If configPath flag is empty, loader will read from ADAPTER_CONFIG_PATH env var
+	log.Info(ctx, "Loading workflow configuration...")
+	loadResult, err := loader.Load(configPath, loader.WithAdapterVersion(version))
 	if err != nil {
 		errCtx := logger.WithErrorField(ctx, err)
-		log.Errorf(errCtx, "Failed to load adapter configuration")
-		return fmt.Errorf("failed to load adapter configuration: %w", err)
+		log.Errorf(errCtx, "Failed to load workflow configuration")
+		return fmt.Errorf("failed to load workflow configuration: %w", err)
 	}
 
-	// Recreate logger with component name from adapter config
-	log, err = logger.NewLogger(buildLoggerConfig(adapterConfig.Metadata.Name))
+	// Extract metadata based on format
+	var componentName, componentNamespace string
+	var apiConfig config_loader.HyperfleetAPIConfig
+
+	if loadResult.Format == loader.FormatAdapterConfig && loadResult.AdapterConfig != nil {
+		// Legacy format - extract from AdapterConfig
+		componentName = loadResult.AdapterConfig.Metadata.Name
+		componentNamespace = loadResult.AdapterConfig.Metadata.Namespace
+		apiConfig = loadResult.AdapterConfig.Spec.HyperfleetAPI
+	} else {
+		// Native SWF format - extract from workflow document
+		componentName = loadResult.Workflow.Document.Name
+		if ns, ok := loadResult.Workflow.Document.Metadata["namespace"].(string); ok {
+			componentNamespace = ns
+		} else {
+			componentNamespace = loadResult.Workflow.Document.Namespace
+		}
+		// For native SWF, use default/environment-based API config
+		apiConfig = config_loader.HyperfleetAPIConfig{
+			Timeout:       "30s",
+			RetryAttempts: 3,
+			RetryBackoff:  "exponential",
+		}
+	}
+
+	// Recreate logger with component name from config
+	log, err = logger.NewLogger(buildLoggerConfig(componentName))
 	if err != nil {
-		return fmt.Errorf("failed to create logger with adapter config: %w", err)
+		return fmt.Errorf("failed to create logger with config: %w", err)
 	}
 
-	log.Infof(ctx, "Adapter configuration loaded successfully: name=%s namespace=%s",
-		adapterConfig.Metadata.Name, adapterConfig.Metadata.Namespace)
+	log.Infof(ctx, "Workflow configuration loaded successfully: name=%s namespace=%s format=%s",
+		componentName, componentNamespace, loadResult.Format)
 	log.Infof(ctx, "HyperFleet API client configured: timeout=%s retryAttempts=%d",
-		adapterConfig.Spec.HyperfleetAPI.Timeout,
-		adapterConfig.Spec.HyperfleetAPI.RetryAttempts)
+		apiConfig.Timeout, apiConfig.RetryAttempts)
 
 	// Get trace sample ratio from environment (default: 10%)
 	sampleRatio := otel.GetTraceSampleRatio(log, ctx)
 
 	// Initialize OpenTelemetry for trace_id/span_id generation and HTTP propagation
-	tp, err := otel.InitTracer(adapterConfig.Metadata.Name, version, sampleRatio)
+	tp, err := otel.InitTracer(componentName, version, sampleRatio)
 	if err != nil {
 		errCtx := logger.WithErrorField(ctx, err)
 		log.Errorf(errCtx, "Failed to initialize OpenTelemetry")
@@ -203,7 +228,7 @@ func runServe() error {
 	}()
 
 	// Start health server immediately (readiness starts as false)
-	healthServer := health.NewServer(log, HealthServerPort, adapterConfig.Metadata.Name)
+	healthServer := health.NewServer(log, HealthServerPort, componentName)
 	if err := healthServer.Start(ctx); err != nil {
 		errCtx := logger.WithErrorField(ctx, err)
 		log.Errorf(errCtx, "Failed to start health server")
@@ -222,7 +247,7 @@ func runServe() error {
 
 	// Start metrics server with build info
 	metricsServer := health.NewMetricsServer(log, MetricsServerPort, health.MetricsConfig{
-		Component: adapterConfig.Metadata.Name,
+		Component: componentName,
 		Version:   version,
 		Commit:    commit,
 	})
@@ -242,7 +267,7 @@ func runServe() error {
 
 	// Create HyperFleet API client from config
 	log.Info(ctx, "Creating HyperFleet API client...")
-	apiClient, err := createAPIClient(adapterConfig.Spec.HyperfleetAPI, log)
+	apiClient, err := createAPIClient(apiConfig, log)
 	if err != nil {
 		errCtx := logger.WithErrorField(ctx, err)
 		log.Errorf(errCtx, "Failed to create HyperFleet API client")
@@ -259,27 +284,35 @@ func runServe() error {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
-	// Create the executor using the builder pattern
-	log.Info(ctx, "Creating event executor...")
-	exec, err := executor.NewBuilder().
-		WithAdapterConfig(adapterConfig).
+	// Create the SWF-based workflow runner
+	// This replaces the legacy executor with Serverless Workflow SDK execution
+	log.Info(ctx, "Creating SWF workflow runner...")
+	runnerBuilder := runner.NewBuilder().
 		WithAPIClient(apiClient).
 		WithK8sClient(k8sClient).
-		WithLogger(log).
-		Build()
-	if err != nil {
-		errCtx := logger.WithErrorField(ctx, err)
-		log.Errorf(errCtx, "Failed to create executor")
-		return fmt.Errorf("failed to create executor: %w", err)
+		WithLogger(log)
+
+	// Use workflow directly for native SWF, or AdapterConfig for legacy format
+	if loadResult.Format == loader.FormatAdapterConfig && loadResult.AdapterConfig != nil {
+		runnerBuilder = runnerBuilder.WithAdapterConfig(loadResult.AdapterConfig)
+	} else {
+		runnerBuilder = runnerBuilder.WithWorkflow(loadResult.Workflow)
 	}
 
-	// Create the event handler from the executor
-	// This handler will:
-	// 1. Extract params from event data
-	// 2. Execute preconditions (API calls, condition checks)
-	// 3. Create/update Kubernetes resources
-	// 4. Execute post actions (status reporting)
-	handler := exec.CreateHandler()
+	workflowRunner, err := runnerBuilder.Build()
+	if err != nil {
+		errCtx := logger.WithErrorField(ctx, err)
+		log.Errorf(errCtx, "Failed to create workflow runner")
+		return fmt.Errorf("failed to create workflow runner: %w", err)
+	}
+
+	// Create the event handler from the workflow runner
+	// The SWF runner executes the 4-phase pipeline:
+	// 1. Extract params from event data (hf:extract)
+	// 2. Execute preconditions (hf:preconditions)
+	// 3. Create/update Kubernetes resources (hf:resources)
+	// 4. Execute post actions (hf:post)
+	handler := workflowRunner.CreateHandler()
 
 	// Handle signals for graceful shutdown
 	sigCh := make(chan os.Signal, 1)

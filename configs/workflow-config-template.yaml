@@ -1,0 +1,166 @@
+# Serverless Workflow converted from AdapterConfig
+# Original: adapter-config-template.yaml
+# Converted by: adapter-migrate v0.2.0
+#
+# NOTE: This workflow uses native SWF constructs for preconditions and post phases.
+# Only hf:resources requires the HyperFleet adapter runtime for Kubernetes operations.
+
+do:
+- extract_params:
+    set:
+      clusterId: ${ .event.id }
+      hyperfleetApiBaseUrl: ${ .env.HYPERFLEET_API_BASE_URL }
+      hyperfleetApiVersion: ${ .env.HYPERFLEET_API_VERSION // "v1" }
+- phase_preconditions:
+    do:
+      # Precondition: clusterStatus - fetch cluster and check phase
+      - cluster_status:
+          try:
+            - api:
+                call: http
+                with:
+                  method: GET
+                  endpoint: ${ .params.hyperfleetApiBaseUrl + "/api/hyperfleet/" + .params.hyperfleetApiVersion + "/clusters/" + .params.clusterId }
+                export:
+                  as: |-
+                    ${ . + {
+                      clusterStatus: .content,
+                      clusterName: .content.name,
+                      clusterPhase: .content.status.phase,
+                      generationId: .content.generation,
+                      cluster_status_ok: (.content.status.phase == "NotReady")
+                    } }
+          catch:
+            retry:
+              limit:
+                attempt:
+                  count: 3
+              backoff:
+                exponential: {}
+            do:
+              - fail:
+                  set:
+                    cluster_status_ok: false
+
+      # Final evaluation: compute allMatched and notMetReason
+      - evaluate:
+          set:
+            allMatched: ${ .cluster_status_ok // false }
+            notMetReason: |-
+              ${ if (.cluster_status_ok // false) == false then "clusterStatus failed" else "" end }
+
+- phase_resources:
+    if: ${ .allMatched == true }
+    call: hf:resources
+    with:
+      config: []  # Resources would be defined here from the original AdapterConfig
+- phase_post:
+    do:
+      # Build the cluster status payload using jq expression
+      - build_cluster_status_payload:
+          set:
+            clusterStatusPayload: |-
+              ${ {
+                adapter: (.params.metadata.name // "unknown"),
+                conditions: [
+                  {
+                    type: "Applied",
+                    status: (if (.resources.clusterNamespace.status.phase // "") == "Active" then "True" else "False" end),
+                    reason: (if (.resources.clusterNamespace.status.phase // "") == "Active" then "NamespaceCreated" else "NamespacePending" end),
+                    message: (if (.resources.clusterNamespace.status.phase // "") == "Active" then "Namespace created successfully" else "Namespace creation in progress" end)
+                  },
+                  {
+                    type: "Available",
+                    status: (if (.resources.clusterNamespace.status.phase // "") == "Active" then "True" else "False" end),
+                    reason: (if (.resources.clusterNamespace.status.phase // "") == "Active" then "NamespaceReady" else "NamespaceNotReady" end),
+                    message: (if (.resources.clusterNamespace.status.phase // "") == "Active" then "Namespace is active and ready" else "Namespace is not active and ready" end)
+                  },
+                  {
+                    type: "Health",
+                    status: (if (.adapter.executionStatus // "") == "success" then "True" elif (.adapter.executionStatus // "") == "failed" then "False" else "Unknown" end),
+                    reason: (if (.adapter.errorReason // "") != "" then .adapter.errorReason else "Healthy" end),
+                    message: (if (.adapter.errorMessage // "") != "" then .adapter.errorMessage else "All adapter operations completed successfully" end)
+                  }
+                ],
+                data: {
+                  namespace: {
+                    name: (.resources.clusterNamespace.metadata.name // ""),
+                    status: (.resources.clusterNamespace.status.phase // "")
+                  }
+                },
+                observed_generation: .generationId,
+                observed_time: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+              } }
+      ## this beeceptor service is useful for debugging HTTP requests
+      ## you can browse them at: https://app.beeceptor.com/console/hyperfleet
+      - test_script_log:
+          try:
+            - api:
+                call: http
+                with:
+                  method: POST
+                  endpoint: https://hyperfleet.free.beeceptor.com
+                  headers:
+                    Content-Type: application/json
+                  body: ${ .clusterStatusPayload }
+                export:
+                  as: |-
+                    ${ . + {
+                      report_cluster_status_response: .content,
+                      report_cluster_status_status: .response.statusCode
+                    } }
+          catch:
+            retry:
+              limit:
+                attempt:
+                  count: 3
+              backoff:
+                exponential: {}
+            do:
+              - error:
+                  set:
+                    report_cluster_status_failed: true
+                    report_cluster_status_error: ${ .error.message // "API call failed" }
+
+      # Report cluster status using native HTTP call with retry
+      - report_cluster_status:
+          try:
+            - api:
+                call: http
+                with:
+                  method: POST
+                  endpoint: ${ .params.hyperfleetApiBaseUrl + "/api/hyperfleet/" + .params.hyperfleetApiVersion + "/clusters/" + .params.clusterId + "/statuses" }
+                  headers:
+                    Content-Type: application/json
+                  body: ${ .clusterStatusPayload }
+                export:
+                  as: |-
+                    ${ . + {
+                      report_cluster_status_response: .content,
+                      report_cluster_status_status: .response.statusCode
+                    } }
+          catch:
+            retry:
+              limit:
+                attempt:
+                  count: 3
+              backoff:
+                exponential: {}
+            do:
+              - error:
+                  set:
+                    report_cluster_status_failed: true
+                    report_cluster_status_error: ${ .error.message // "API call failed" }
+document:
+  dsl: 1.0.0
+  metadata:
+    namespace: hyperfleet-system
+    originalAPIVersion: hyperfleet.redhat.com/v1alpha1
+    originalKind: AdapterConfig
+  name: example-adapter
+  namespace: hyperfleet
+  tags:
+    hyperfleet.io/adapter-type: example
+    hyperfleet.io/component: adapter
+  title: 'Adapter: example-adapter'
+  version: 0.1.0
