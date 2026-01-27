@@ -53,6 +53,7 @@ helm delete hyperfleet-adapter
 | `config.adapterYaml` | Adapter YAML config content | `""` |
 
 When `config.adapterYaml` is set:
+
 - Creates `adapter.yaml` key in ConfigMap
 - Mounts at `/etc/adapter/adapter.yaml`
 - Sets `ADAPTER_CONFIG_PATH=/etc/adapter/adapter.yaml`
@@ -72,6 +73,7 @@ When `config.adapterYaml` is set:
 | `broker.envKeys` | Specific keys to mount (empty = all via envFrom) | `[]` |
 
 When `broker.yaml` is set:
+
 - Creates `broker.yaml` key in ConfigMap
 - Mounts at `/etc/broker/broker.yaml`
 - Sets `BROKER_CONFIG_FILE=/etc/broker/broker.yaml`
@@ -163,8 +165,7 @@ helm install hyperfleet-adapter ./charts/ \
   --set broker.create=true \
   --set broker.type=googlepubsub \
   --set broker.subscriptionId=my-subscription \
-  --set broker.topic=my-topic \
-  --set 'serviceAccount.annotations.iam\.gke\.io/gcp-service-account=adapter@PROJECT.iam.gserviceaccount.com'
+  --set broker.topic=my-topic
 ```
 
 ### Using Existing ServiceAccount
@@ -191,8 +192,7 @@ replicaCount: 2
 
 serviceAccount:
   create: true
-  annotations:
-    iam.gke.io/gcp-service-account: adapter@my-project.iam.gserviceaccount.com
+  name: my-adapter
 
 hyperfleetApi:
   baseUrl: https://api.hyperfleet.example.com
