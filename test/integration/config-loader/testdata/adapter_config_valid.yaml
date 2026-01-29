@@ -60,8 +60,11 @@ spec:
       capture:
         - name: "clusterName"
           field: "metadata.name"
-        - name: "clusterPhase"
-          field: "status.phase"
+        - name: "readyConditionStatus"
+          expression: |
+            status.conditions.filter(c, c.type == "Ready").size() > 0
+              ? status.conditions.filter(c, c.type == "Ready")[0].status
+              : "False"
         - name: "region"
           field: "spec.region"
         - name: "cloudProvider"
@@ -70,9 +73,9 @@ spec:
           field: "spec.vpc_id"
       # Structured conditions with valid operators
       conditions:
-        - field: "clusterPhase"
-          operator: "in"
-          value: ["Provisioning", "Installing", "Ready"]
+        - field: "readyConditionStatus"
+          operator: "equals"
+          value: "True"
         - field: "cloudProvider"
           operator: "in"
           value: ["aws", "gcp", "azure"]
@@ -82,7 +85,7 @@ spec:
     - name: "validationCheck"
       # Valid CEL expression
       expression: |
-        clusterPhase == "Ready" || clusterPhase == "Provisioning"
+        readyConditionStatus == "True"
 
   # Resources with valid K8s manifests
   resources:

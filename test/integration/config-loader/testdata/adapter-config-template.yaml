@@ -14,12 +14,12 @@
 # Option 1: Expression syntax (CEL)
 #   when:
 #     expression: |
-#       clusterPhase == "Terminating"
+#       readyConditionStatus == "False"
 #
 # Option 2: Structured conditions (field + operator + value)
 #   when:
 #     conditions:
-#       - field: "clusterPhase"
+#       - field: "readyConditionStatus"
 #         operator: "equals"
 #         value: "Terminating"
 #
@@ -146,8 +146,11 @@ spec:
       capture:
         - name: "clusterName"
           field: "metadata.name"
-        - name: "clusterPhase"
-          field: "status.phase"
+        - name: "readyConditionStatus"
+          expression: |
+            status.conditions.filter(c, c.type == "Ready").size() > 0
+              ? status.conditions.filter(c, c.type == "Ready")[0].status
+              : "False"
         - name: "region"
           field: "spec.region"
         - name: "cloudProvider"
@@ -157,9 +160,9 @@ spec:
         - name: "nodeCount"
           field: "spec.node_count"
       conditions:
-        - field: "clusterPhase"
-          operator: "in"
-          value: ["Provisioning", "Installing", "Ready"]
+        - field: "readyConditionStatus"
+          operator: "equals"
+          value: "True"
         - field: "cloudProvider"
           operator: "in"
           value: ["aws", "gcp", "azure"]

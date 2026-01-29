@@ -34,12 +34,7 @@ spec:
       default: "v1"
 
     - name: "clusterId"
-      source: "event.cluster_id"
-      type: "string"
-      required: true
-
-    - name: "resourceId"
-      source: "event.resource_id"
+      source: "event.id"
       type: "string"
       required: true
 
@@ -118,14 +113,6 @@ spec:
         namespace: "cluster-{{ .clusterId }}"
         byName: "cluster-config-{{ .clusterId }}"
 
-    - name: "externalTemplate"
-      manifest:
-        ref: "templates/deployment.yaml"
-      discovery:
-        namespace: "cluster-{{ .clusterId }}"
-        bySelectors:
-          labelSelector:
-            hyperfleet.io/cluster-id: "{{ .clusterId }}"
 
   # Post-processing with valid CEL expressions
   post:

@@ -34,12 +34,12 @@ spec:
       default: "v1"
 
     - name: "clusterId"
-      source: "event.cluster_id"
+      source: "event.id"
       type: "string"
       required: true
 
-    - name: "resourceId"
-      source: "event.resource_id"
+    - name: "generation"
+      source: "event.generation"
       type: "string"
       required: true
 
@@ -48,13 +48,13 @@ spec:
     - name: "clusterStatus"
       apiCall:
         method: "GET"
-        url: "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}"
+        url: "{{ .hyperfleetApiBaseUrl }}/api/hyperfleet/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}"
         timeout: 10s
         retryAttempts: 3
         retryBackoff: "exponential"
       capture:
         - name: "clusterName"
-          field: "metadata.name"
+          field: "name"
         - name: "readyConditionStatus"
           expression: |
             status.conditions.filter(c, c.type == "Ready").size() > 0
@@ -70,17 +70,12 @@ spec:
       conditions:
         - field: "readyConditionStatus"
           operator: "equals"
-          value: "True"
-        - field: "cloudProvider"
-          operator: "in"
-          value: ["aws", "gcp", "azure"]
-        - field: "vpcId"
-          operator: "exists"
+          value: "False"
 
     - name: "validationCheck"
       # Valid CEL expression
       expression: |
-        readyConditionStatus == "True"
+        readyConditionStatus == "False"
 
   # Resources with valid K8s manifests
   resources:
@@ -93,17 +88,14 @@ spec:
           labels:
             hyperfleet.io/cluster-id: "{{ .clusterId }}"
             hyperfleet.io/cluster-name: "{{ .clusterName }}"
-            hyperfleet.io/region: "{{ .region }}"
-            hyperfleet.io/provider: "{{ .cloudProvider }}"
-            hyperfleet.io/managed-by: "{{ .metadata.name }}"
           annotations:
-            hyperfleet.io/vpc-id: "{{ .vpcId }}"
+            hyperfleet.io/generation: "{{ .generation }}"
       discovery:
         namespace: "*"  # Cluster-scoped resource (Namespace)
         bySelectors:
           labelSelector:
             hyperfleet.io/cluster-id: "{{ .clusterId }}"
-            hyperfleet.io/managed-by: "{{ .metadata.name }}"
+            hyperfleet.io/cluster-name: "{{ .clusterName }}"
 
     - name: "clusterConfigMap"
       manifest:
@@ -114,13 +106,15 @@ spec:
           namespace: "cluster-{{ .clusterId }}"
           labels:
             hyperfleet.io/cluster-id: "{{ .clusterId }}"
+          annotations:
+            hyperfleet.io/generation: "{{ .generation }}"
       discovery:
         namespace: "cluster-{{ .clusterId }}"
         byName: "cluster-config-{{ .clusterId }}"
 
     - name: "externalTemplate"
       manifest:
-        ref: "templates/deployment.yaml"
+        ref: "/etc/adapter/deployment.yaml"
       discovery:
         namespace: "cluster-{{ .clusterId }}"
         bySelectors:
@@ -132,11 +126,12 @@ spec:
     payloads:
       - name: "clusterStatusPayload"
         build:
+          adapter: "{{ .metadata.name }}"
           conditions:
-            applied:
+            - type: "Applied"
               status:
                 expression: |
-                  resources.clusterNamespace.status.phase == "Active"
+                  resources.clusterNamespace.status.phase == "Active" ? "True" : "False"
               reason:
                 expression: |
                   has(resources.clusterNamespace.status.phase) ? "ResourcesCreated" : "Pending"
@@ -144,10 +139,10 @@ spec:
                 expression: |
                   "Namespace status: " + resources.clusterNamespace.status.phase
 
-            available:
+            - type: "Available"
               status:
                 expression: |
-                  resources.clusterConfigMap != null
+                  resources.clusterConfigMap != null ? "True" : "False"
               reason:
                 expression: |
                   "ConfigMapReady"
@@ -155,10 +150,10 @@ spec:
                 expression: |
                   "ConfigMap is available"
 
-            health:
+            - type: "Health"
               status:
                 expression: |
-                  true
+                  "True"
               reason:
                 expression: |
                   "Healthy"
@@ -173,7 +168,7 @@ spec:
               description: "Cluster namespace is active"
 
           observed_generation:
-            value: "{{ .resourceId }}"
+            value: "{{ .generation }}"
             description: "Resource ID processed"
 
           lastUpdated:
@@ -184,7 +179,7 @@ spec:
       - name: "reportClusterStatus"
         apiCall:
           method: "POST"
-          url: "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/status"
+          url: "{{ .hyperfleetApiBaseUrl }}/api/hyperfleet/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/statuses"
           headers:
             - name: "Content-Type"
               value: "application/json"

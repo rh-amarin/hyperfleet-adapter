@@ -31,7 +31,7 @@ func getConfigPath() string {
 	if envPath := os.Getenv("ADAPTER_CONFIG_PATH"); envPath != "" {
 		return envPath
 	}
-	return filepath.Join(getProjectRoot(), "configs/adapter-config-template.yaml")
+	return filepath.Join(getProjectRoot(), "configs/adapterconfig-template.yaml")
 }
 
 // TestConfigLoadAndCriteriaEvaluation tests loading config and evaluating preconditions
@@ -46,8 +46,8 @@ func TestConfigLoadAndCriteriaEvaluation(t *testing.T) {
 	ctx := criteria.NewEvaluationContext()
 
 	// Simulate data extracted from HyperFleet API response
-	// NOTE: clusterPhase must match the condition in the template (NotReady)
-	ctx.Set("clusterPhase", "NotReady")
+	// NOTE: readyConditionStatus must match the condition in the template (True)
+	ctx.Set("readyConditionStatus", "True")
 	ctx.Set("cloudProvider", "aws")
 	ctx.Set("vpcId", "vpc-12345")
 	ctx.Set("region", "us-east-1")
@@ -66,7 +66,12 @@ func TestConfigLoadAndCriteriaEvaluation(t *testing.T) {
 			"node_count": 3,
 		},
 		"status": map[string]interface{}{
-			"phase": "NotReady",
+			"conditions": []map[string]interface{}{
+				{
+					"type":   "Ready",
+					"status": "True",
+				},
+			},
 		},
 	})
 
@@ -128,9 +133,9 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 	precond := config.GetPreconditionByName("clusterStatus")
 	require.NotNil(t, precond)
 
-	t.Run("preconditions fail with wrong phase", func(t *testing.T) {
+	t.Run("preconditions fail with Ready condition False", func(t *testing.T) {
 		ctx := criteria.NewEvaluationContext()
-		ctx.Set("clusterPhase", "Terminating") // Not matching "NotReady"
+		ctx.Set("readyConditionStatus", "False") // Not matching expected "True"
 
 		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
 		require.NoError(t, err)
@@ -145,13 +150,13 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 
 		result, err := evaluator.EvaluateConditions(conditions)
 		require.NoError(t, err)
-		assert.False(t, result.Matched, "preconditions should fail with wrong phase")
-		assert.Equal(t, 0, result.FailedCondition, "first condition (clusterPhase) should fail")
+		assert.False(t, result.Matched, "preconditions should fail with Ready condition False")
+		assert.Equal(t, 0, result.FailedCondition, "first condition (readyConditionStatus) should fail")
 	})
 
-	t.Run("preconditions fail with Ready phase", func(t *testing.T) {
+	t.Run("preconditions fail with Ready condition Unknown", func(t *testing.T) {
 		ctx := criteria.NewEvaluationContext()
-		ctx.Set("clusterPhase", "Ready") // Not matching "NotReady"
+		ctx.Set("readyConditionStatus", "Unknown") // Not matching expected "True"
 
 		evaluator, err := criteria.NewEvaluator(context.Background(), ctx, logger.NewTestLogger())
 		require.NoError(t, err)
@@ -166,7 +171,7 @@ func TestConfigWithFailingPreconditions(t *testing.T) {
 
 		result, err := evaluator.EvaluateConditions(conditions)
 		require.NoError(t, err)
-		assert.False(t, result.Matched, "preconditions should fail when phase is Ready (expected NotReady)")
+		assert.False(t, result.Matched, "preconditions should fail when Ready condition is Unknown")
 	})
 
 	t.Run("preconditions fail with missing vpcId", func(t *testing.T) {

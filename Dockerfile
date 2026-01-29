@@ -28,29 +28,6 @@ WORKDIR /app
 # Copy binary from builder (make build outputs to bin/)
 COPY --from=builder /build/bin/hyperfleet-adapter /app/adapter
 
-# Copy default config (fallback if ConfigMap is not mounted)
-# Default config location: /app/configs/adapter.yaml
-COPY configs/adapter.yaml /app/configs/adapter.yaml
-
-# Config file resolution order (application should implement):
-# 1. CONFIG_FILE environment variable (if set) - highest priority
-# 2. /etc/adapter/config/adapter.yaml (ConfigMap mount point)
-# 3. /app/configs/adapter.yaml (default packaged config) - fallback
-#
-# To use ConfigMap in Kubernetes:
-#   volumeMounts:
-#   - name: config
-#     mountPath: /etc/adapter/config
-#   volumes:
-#   - name: config
-#     configMap:
-#       name: adapter-config
-#
-# To override with environment variable:
-#   env:
-#   - name: CONFIG_FILE
-#     value: /path/to/custom/config.yaml
-
 ENTRYPOINT ["/app/adapter"]
 CMD ["serve"]
 

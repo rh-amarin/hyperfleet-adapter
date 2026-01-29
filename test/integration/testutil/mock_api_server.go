@@ -60,7 +60,12 @@ func NewMockAPIServer(t *testing.T) *MockAPIServer {
 				"node_count": 3,
 			},
 			"status": map[string]interface{}{
-				"phase": "Ready",
+				"conditions": []map[string]interface{}{
+					{
+						"type":   "Ready",
+						"status": "True",
+					},
+				},
 			},
 		},
 		statusResponses: make([]map[string]interface{}, 0),
@@ -219,7 +224,12 @@ func (m *MockAPIServer) Reset() {
 			"node_count": 3,
 		},
 		"status": map[string]interface{}{
-			"phase": "Ready",
+			"conditions": []map[string]interface{}{
+				{
+					"type":   "Ready",
+					"status": "True",
+				},
+			},
 		},
 	}
 }

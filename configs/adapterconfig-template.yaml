@@ -14,12 +14,12 @@
 # Option 1: Expression syntax (CEL)
 #   when:
 #     expression: |
-#       clusterPhase == "Terminating"
+#       readyConditionStatus == "False"
 #
 # Option 2: Structured conditions (field + operator + value)
 #   when:
 #     conditions:
-#       - field: "clusterPhase"
+#       - field: "readyConditionStatus"
 #         operator: "equals"
 #         value: "Terminating"
 #
@@ -125,11 +125,11 @@ spec:
   # DATA SCOPES:
   # ============
   # Capture scope (field/expression): API response data only
-  #   - Access: status.phase, items[0].name, etc.
+  #   - Access: status.conditions, items[0].name, etc.
   #
   # Conditions scope (conditions/expression): Full execution context
   #   - params.*             : Original extracted params
-  #   - <precondition-name>.*: Full API response (e.g., clusterStatus.status.phase)
+  #   - <precondition-name>.*: Full API response (e.g., clusterStatus.status.conditions)
   #   - capturedField        : Explicitly captured values
   #   - adapter.*            : Adapter metadata
   #   - resources.*          : Created resources (empty during preconditions)
@@ -156,8 +156,11 @@ spec:
         # Simple dot notation
         - name: "clusterName"
           field: "name"
-        - name: "clusterPhase"
-          field: "status.phase"
+        - name: "readyConditionStatus"
+          expression: |
+            status.conditions.filter(c, c.type == "Ready").size() > 0
+              ? status.conditions.filter(c, c.type == "Ready")[0].status
+              : "False"
         - name: "generationId"
           field: "generation"
         
@@ -172,14 +175,14 @@ spec:
       
       # Conditions to check. SCOPE: Full execution context
       # You can access:
-      #   - Captured values: clusterPhase, clusterName, etc.
-      #   - Full API response: clusterStatus.status.phase, clusterStatus.spec.nodeCount
+      #   - Captured values: readyConditionStatus, clusterName, etc.
+      #   - Full API response: clusterStatus.status.conditions, clusterStatus.spec.nodeCount
       #   - Params: clusterId, hyperfleetApiBaseUrl, etc.
       conditions:
         # Using captured value
-        - field: "clusterPhase"
+        - field: "readyConditionStatus"
           operator: "equals"
-          value: "NotReady"
+          value: "True"
         
         # Or dig directly into API response using precondition name
         # - field: "clusterStatus.status.nodeCount"
@@ -188,7 +191,7 @@ spec:
       
       # Alternative: CEL expression with full access
       # expression: |
-      #   clusterStatus.status.phase == "Ready" && 
+      #   clusterStatus.status.conditions.filter(c, c.type == "Ready")[0].status == "True" &&
       #   clusterStatus.spec.nodeCount > 0
   
   # ============================================================================

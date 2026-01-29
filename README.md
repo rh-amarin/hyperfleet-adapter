@@ -1,17 +1,19 @@
 # HyperFleet Adapter
 
-HyperFleet Adapter Framework - Event-driven adapter services for HyperFleet cluster provisioning. Handles CloudEvents consumption, AdapterConfig CRD integration, precondition evaluation, Kubernetes Job creation/monitoring, and status reporting via API. Supports GCP Pub/Sub, RabbitMQ broker abstraction.
+HyperFleet Adapter Framework - configuration driven framework to run tasks for cluster provisioning.
 
-## Features
+An instance of an adapter targets an specific resource such as a Cluster or NodePool. And provides a clear workflow:
 
-- **CloudEvents Processing**: Consumes and processes CloudEvents from message brokers
-- **Broker Agnostic**: Supports multiple message brokers (GCP Pub/Sub, RabbitMQ)
-- **Kubernetes Integration**: Creates and monitors Kubernetes Jobs for cluster provisioning
-- **AdapterConfig CRD**: Integrates with Kubernetes Custom Resource Definitions
-- **Precondition Evaluation**: Evaluates preconditions before cluster provisioning
-- **Status Reporting**: Provides API endpoints for status reporting
-- **Structured Logging**: Context-aware logging with operation IDs and transaction tracking
-- **Error Handling**: Comprehensive error handling with error codes and API references
+- **Listens to events**: A CloudEvent informs what resource to process.
+  - Supports different types of brokers via hyperfleet-broker lib.
+- **Param phase**: Gets parameters from environment, event and current resource status (by querying HyperFleet API)
+- **Decision phase**: Computes where an action has to be performed to a resource using the params
+- **Resource phase**: Creates resources using a configured client
+  - Kubernetes client: local or remote cluster
+  - Maestro client: remote cluster via Maestro server
+- **Status reporting**: Reports result of task execution to HyperFleet API
+  - Builds the payload evaluating the status of the resources created in the resource phase
+
 
 ## Prerequisites
 
@@ -145,14 +147,21 @@ Tool versions are tracked in `.bingo/*.mod` files and loaded automatically via `
 
 ### Configuration
 
+A  HyperFleet Adapter requires several files for configuration:
+
+- **Adapter runtime**: Configures the adapter framework application
+- **Broker configuration**: Configures the specific broker to use by the adapter framework to receive CloudEvents
+
+#### Adapter task
+
 The adapter supports multiple configuration sources with the following priority order:
 
 1. **Environment Variable** (`ADAPTER_CONFIG_FILE`) - Highest priority
-2. **ConfigMap Mount** (`/etc/adapter/config/adapter.yaml`)
+2. **Default location Mount** (`/etc/adapter/adapterconfig.yaml`)
 
-See `configs/adapter-config-template.yaml` for configuration template.
+See `configs/adapterconfig-template.yaml` for configuration template.
 
-### Broker Configuration
+#### Broker Configuration
 
 Broker configuration is managed separately and can be provided via:
 
@@ -160,6 +169,8 @@ Broker configuration is managed separately and can be provided via:
 - **Environment Variables**: For broker-specific settings
 
 See the Helm chart documentation for broker configuration options.
+
+
 
 ## Deployment
 

@@ -3,9 +3,9 @@
 # This is a minimal default configuration packaged with the container image.
 # In production, this should be overridden via:
 #   1. CONFIG_FILE environment variable (highest priority)
-#   2. ConfigMap mounted at /etc/adapter/config/adapter.yaml
+#   2. ConfigMap mounted at /etc/adapter/adapterconfig.yaml
 #
-# See configs/adapter-config-template.yaml for full configuration options.
+# See configs/adapterconfig.yaml for full configuration options.
 
 apiVersion: hyperfleet.redhat.com/v1alpha1
 kind: AdapterConfig

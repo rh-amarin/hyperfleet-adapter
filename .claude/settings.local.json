@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(argocd:*)",
+      "Bash(argocd app list:*)",
+      "Bash(kubectl get:*)",
+      "Bash(kubectl describe:*)",
+      "Bash(git fetch:*)",
+      "Bash(helm template:*)",
+      "Bash(kubectl annotate:*)",
+      "Bash(kubectl logs:*)"
+    ]
+  }
+}

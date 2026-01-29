@@ -118,7 +118,7 @@ func (pe *PreconditionExecutor) executePrecondition(ctx context.Context, precond
 		}
 
 		// Store full response under precondition name for condition digging
-		// e.g., conditions can access "check-cluster.status.phase"
+		// e.g., conditions can access "check-cluster.status.conditions"
 		execCtx.Params[precond.Name] = responseData
 
 		// Capture fields from response

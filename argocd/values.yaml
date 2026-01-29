@@ -1,0 +1,43 @@
+# These values are used to configure resources deployed on the region clusters.
+# they are coming from the applicationset defined here: argocd/config/global/region-argocd-root-app/template.yaml
+
+# Uncomment and customize the values below for your deployment.
+
+# The environment name (e.g., integration, staging, production)
+# environment: "integration"
+
+# Short environment name (same as environment, or abbreviated)
+# shortenv: "int"
+
+# The sector/tenant identifier
+# sector: "main"
+
+# The GCP region where this region cluster is deployed
+# region: "us-central1"
+
+# The GCP project ID for the global cluster
+# global_project_id: "gcp-hcp-int-global"
+
+# The GCP project ID for this region cluster
+# region_project_id: "int-us-central1"
+
+# The GCP project ID for this region cluster
+# project_id: "int-us-central1"
+
+# Git repository URL containing the Helm charts and configurations
+# git_repo: "<git_repo_url>"
+
+# Git revision (branch, tag, or commit SHA) to deploy from
+# git_revision: "main"
+
+# The name of the Kubernetes secret containing Git credentials (if needed)
+# git_credentials_secret_name: "git-credentials"
+
+# The name of the GKE cluster in this region
+# cluster_name: "int-us-central1-gke"
+
+# The parent domain for HC DNS
+#hc_dns_parent_domain: int.gcp-hcp.openshiftapps.com
+
+# The comma-separated list of DNS domains for HC DNS
+# hc_dns_domains: us-central1-abcdef-1.int.gcp-hcp.openshiftapps.com,us-central1-abcdef-2.int.gcp-hcp.openshiftapps.com
