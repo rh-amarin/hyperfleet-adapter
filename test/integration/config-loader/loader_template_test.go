@@ -42,7 +42,7 @@ func TestLoadTemplateConfig(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_BASE_URL", "http://test-api.example.com")
 
 	projectRoot := getProjectRoot()
-	configPath := filepath.Join(projectRoot, "configs/adapter-config-template.yaml")
+	configPath := filepath.Join(projectRoot, "configs/adapterconfig-template.yaml")
 
 	config, err := config_loader.Load(configPath)
 	require.NoError(t, err, "should be able to load template config")
@@ -92,7 +92,7 @@ func TestLoadTemplateConfig(t *testing.T) {
 	// Verify conditions in precondition
 	assert.GreaterOrEqual(t, len(firstPrecond.Conditions), 1)
 	firstCondition := firstPrecond.Conditions[0]
-	assert.Equal(t, "clusterPhase", firstCondition.Field)
+	assert.Equal(t, "readyConditionStatus", firstCondition.Field)
 	assert.Equal(t, "equals", firstCondition.Operator)
 
 	// Verify resources

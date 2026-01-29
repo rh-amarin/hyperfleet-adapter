@@ -1,0 +1,169 @@
+# Simple valid HyperFleet Adapter Configuration for testing
+
+apiVersion: hyperfleet.redhat.com/v1alpha1
+kind: AdapterConfig
+metadata:
+  name: example2-job
+  namespace: hyperfleet-system
+  labels:
+    hyperfleet.io/adapter-type: example2-job
+    hyperfleet.io/component: adapter
+
+spec:
+  adapter:
+    version: "0.1.0"
+  
+  hyperfleetApi:
+    timeout: 2s
+    retryAttempts: 3
+    retryBackoff: exponential
+
+  kubernetes:
+    apiVersion: "v1"
+
+  # Parameters with all required variables
+  params:
+    - name: "hyperfleetApiBaseUrl"
+      source: "env.HYPERFLEET_API_BASE_URL"
+      type: "string"
+      required: true
+
+    - name: "hyperfleetApiVersion"
+      source: "env.HYPERFLEET_API_VERSION"
+      type: "string"
+      default: "v1"
+
+    - name: "clusterId"
+      source: "event.id"
+      type: "string"
+      required: true
+
+    - name: "namespace"
+      source: "env.NAMESPACE"
+      type: "string"
+      required: true
+
+    - name: "serviceAccountName"
+      source: "env.SERVICE_ACCOUNT"
+      type: "string"
+      required: true
+
+    - name: "simulateResult"
+      source: "env.SIMULATE_RESULT"
+      type: "string"
+      required: true
+
+  # Preconditions with valid operators and CEL expressions
+  preconditions:
+    - name: "clusterStatus"
+      apiCall:
+        method: "GET"
+        url: "{{ .hyperfleetApiBaseUrl }}/api/hyperfleet/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}"
+        timeout: 10s
+        retryAttempts: 3
+        retryBackoff: "exponential"
+      capture:
+        - name: "clusterName"
+          field: "name"
+        - name: "generationSpec"
+          field: "generation"
+        - name: "readyConditionStatus"
+          expression: |
+            status.conditions.filter(c, c.type == "Ready").size() > 0
+              ? status.conditions.filter(c, c.type == "Ready")[0].status
+              : "False"
+      # Structured conditions with valid operators
+      conditions:
+        - field: "readyConditionStatus"
+          operator: "equals"
+          value: "False"
+
+    - name: "validationCheck"
+      # Valid CEL expression
+      expression: |
+        readyConditionStatus == "False"
+
+  # Resources with valid K8s manifests
+  resources:
+    - name: "job"
+      manifest:
+        ref: "/etc/adapter/job.yaml"
+      discovery:
+        namespace: "*"
+        bySelectors:
+          labelSelector:
+            hyperfleet.io/generation: "{{ .generationSpec }}"
+            hyperfleet.io/cluster-id: "{{ .clusterId }}"
+  # Post-processing with valid CEL expressions
+
+  post:
+    payloads:
+      # Build status payload inline
+      - name: "jobStatusPayload"
+        build:
+          adapter: "{{ .metadata.name }}"
+          conditions:
+            # Applied: Job successfully created
+            - type: "Applied"
+              status:
+                expression: |
+                  has(resources.job) ? "True" : "False"
+              reason:
+                expression: |
+                  has(resources.job)
+                    ? "JobApplied"
+                    : "JobPending"
+              message:
+                expression: |
+                  has(resources.job)
+                    ? "Validation job applied successfully"
+                    : "Validation job is pending to applied"
+            # Available: Check job status conditions
+            - type: "Available"
+              status:
+                expression: |
+                  resources.?job.?status.?conditions.orValue([]).exists(c, c.type == "Available")
+                    ? resources.job.status.conditions.filter(c, c.type == "Available")[0].status : "False"
+              reason:
+                expression: |
+                  resources.?job.?status.?conditions.orValue([]).exists(c, c.type == "Available")
+                    ? resources.job.status.conditions.filter(c, c.type == "Available")[0].reason
+                    : resources.?job.?status.?conditions.orValue([]).exists(c, c.type == "Failed") ? "ValidationFailed"
+                         : resources.?job.?status.hasValue() ? "ValidationInProgress" : "ValidationPending"
+              message:
+                expression: |
+                  resources.?job.?status.?conditions.orValue([]).exists(c, c.type == "Available")
+                    ? resources.job.status.conditions.filter(c, c.type == "Available")[0].message
+                    : resources.?job.?status.?conditions.orValue([]).exists(c, c.type == "Failed") ? "Validation failed"
+                         : resources.?job.?status.hasValue() ? "Validation in progress" : "Validation is pending"
+            # Health: Adapter execution status (runtime)
+            - type: "Health"
+              status:
+                expression: |
+                  adapter.?executionStatus.orValue("") == "success" ? "True" : (adapter.?executionStatus.orValue("") == "failed" ? "False" : "Unknown")
+              reason:
+                expression: |
+                  adapter.?errorReason.orValue("") != "" ? adapter.?errorReason.orValue("") : "Healthy"
+              message:
+                expression: |
+                  adapter.?errorMessage.orValue("") != "" ? adapter.?errorMessage.orValue("") : "All adapter operations completed successfully"
+          # Event generation ID metadata field needs to use expression to avoid interpolation issues
+          observed_generation:
+            expression: "generationSpec"
+          observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
+    # ============================================================================
+    # Post Actions
+    # ============================================================================
+    postActions:
+      - name: "reportClusterStatus"
+        apiCall:
+          method: "POST"
+          url: "{{ .hyperfleetApiBaseUrl }}/api/hyperfleet/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/statuses"
+          body: "{{ .jobStatusPayload }}"
+          timeout: 30s
+          retryAttempts: 3
+          retryBackoff: "exponential"
+          headers:
+            - name: "Content-Type"
+              value: "application/json"
+

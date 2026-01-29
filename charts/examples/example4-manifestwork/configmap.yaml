@@ -1,0 +1,34 @@
+# ConfigMap template to be deployed on remote cluster via Maestro ManifestWork
+#
+# This resource will be wrapped in a ManifestWork and sent to the target cluster
+# through the Maestro server. The Maestro agent on the target cluster will apply
+# this ConfigMap.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "hyperfleet-config-{{ .clusterId }}"
+  namespace: default
+  labels:
+    hyperfleet.io/cluster-id: "{{ .clusterId }}"
+    hyperfleet.io/cluster-name: "{{ .clusterName }}"
+    hyperfleet.io/managed-by: "{{ .metadata.name }}"
+  annotations:
+    hyperfleet.io/generation: "{{ .generationSpec }}"
+    hyperfleet.io/created-at: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
+data:
+  # Cluster configuration data
+  cluster-id: "{{ .clusterId }}"
+  cluster-name: "{{ .clusterName }}"
+  generation: "{{ .generationSpec }}"
+
+  # Example configuration that could be used by workloads on the remote cluster
+  config.yaml: |
+    apiVersion: v1
+    kind: HyperFleetClusterConfig
+    metadata:
+      clusterId: {{ .clusterId }}
+      clusterName: {{ .clusterName }}
+    spec:
+      managedBy: hyperfleet
+      generation: {{ .generationSpec }}

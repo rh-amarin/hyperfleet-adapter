@@ -1,0 +1,229 @@
+---
+# Source: hyperfleet-adapter/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: release-name-hyperfleet-adapter
+  labels:
+    helm.sh/chart: hyperfleet-adapter-1.0.0
+    app.kubernetes.io/name: hyperfleet-adapter
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: hyperfleet-adapter/templates/configmap-adapterconfig.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-name-hyperfleet-adapter-config
+  labels:
+    helm.sh/chart: hyperfleet-adapter-1.0.0
+    app.kubernetes.io/name: hyperfleet-adapter
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: adapter-config
+data:
+  # Task YAML configuration
+  adapterconfig.yaml: |
+
+    apiVersion: hyperfleet.redhat.com/v1alpha1
+    kind: AdapterConfig
+---
+# Source: hyperfleet-adapter/templates/configmap-broker.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-name-hyperfleet-adapter-broker
+  labels:
+    helm.sh/chart: hyperfleet-adapter-1.0.0
+    app.kubernetes.io/name: hyperfleet-adapter
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: broker-config
+    hyperfleet.io/broker-type: googlepubsub
+data:
+  BROKER_TOPIC: "mytopic"
+  BROKER_SUBSCRIPTION_ID: ""
+  broker.yaml: |
+
+    broker:
+      type: googlepubsub
+      googlepubsub:
+        project_id: "hcm-hyperfleet"
+        topic: "mytopic"
+        deadLetterTopic: ""
+      subscriber:
+        parallelism: 1
+---
+# Source: hyperfleet-adapter/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: release-name-hyperfleet-adapter
+  labels:
+    helm.sh/chart: hyperfleet-adapter-1.0.0
+    app.kubernetes.io/name: hyperfleet-adapter
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+# Source: hyperfleet-adapter/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: release-name-hyperfleet-adapter
+  labels:
+    helm.sh/chart: hyperfleet-adapter-1.0.0
+    app.kubernetes.io/name: hyperfleet-adapter
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: release-name-hyperfleet-adapter
+subjects:
+  - kind: ServiceAccount
+    name: release-name-hyperfleet-adapter
+    namespace: default
+---
+# Source: hyperfleet-adapter/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-name-hyperfleet-adapter
+  labels:
+    helm.sh/chart: hyperfleet-adapter-1.0.0
+    app.kubernetes.io/name: hyperfleet-adapter
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hyperfleet-adapter
+      app.kubernetes.io/instance: release-name
+  template:
+    metadata:
+      annotations:
+        checksum/config: 401779479d712c7cd33424233b58a34be717ff21fd3b8a83c9467c7bce3456e0
+      labels:
+        app.kubernetes.io/name: hyperfleet-adapter
+        app.kubernetes.io/instance: release-name
+    spec:
+      serviceAccountName: release-name-hyperfleet-adapter
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: hyperfleet-adapter
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          image: "CHANGE_ME/CHANGE_ME:CHANGE_ME"
+          imagePullPolicy: Always
+          command:
+            - /app/adapter
+          args:
+            - serve
+            - --config
+            - /etc/adapter/adapterconfig.yaml
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+            - containerPort: 9090
+              name: metrics
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: debug
+            - name: HYPERFLEET_API_BASE_URL
+              value: ""
+            - name: HYPERFLEET_API_VERSION
+              value: "v1"
+            - name: BROKER_CONFIG_FILE
+              value: /etc/broker/broker.yaml
+            - name: BROKER_SUBSCRIPTION_ID
+              value: ""
+            - name: BROKER_TOPIC
+              value: "mytopic"
+          livenessProbe:
+            
+            httpGet:
+              path: /healthz
+              port: 8080
+          readinessProbe:
+            
+            httpGet:
+              path: /readyz
+              port: 8080
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/adapter
+              readOnly: true
+            - name: broker-config
+              mountPath: /etc/broker/broker.yaml
+              subPath: broker.yaml
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: release-name-hyperfleet-adapter-config
+        - name: broker-config
+          configMap:
+            name: release-name-hyperfleet-adapter-broker
+            items:
+              - key: broker.yaml
+                path: broker.yaml

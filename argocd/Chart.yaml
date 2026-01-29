@@ -1,0 +1,5 @@
+apiVersion: v2
+name: adapter-chart
+description: ArgoCD applications for region cluster in integration/main/us-central1
+type: application
+version: 0.1.0

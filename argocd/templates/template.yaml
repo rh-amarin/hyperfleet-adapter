@@ -1,0 +1,74 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: adapter5
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: '0'
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rh-amarin/hyperfleet-adapter
+    targetRevision: flexible-helm
+    path: charts
+    helm:
+      parameters:
+      # this section is like defining values with helm --set name=value
+      - name: image.registry
+        value: quay.io/amarin
+      - name: image.repository
+        value: hyperfleet-adapter
+      - name: image.tag
+        value: dev-b35dda1
+      - name: statusReporterImage
+        value: quay.io/amarin/status-reporter:dev-40317e8
+      # from here it is similar to defining a values.yaml for helm
+      valuesObject:
+        adapterConfig:
+          #configMapName: adapterconfig
+          create: true
+          files:
+            adapterconfig.yaml: examples/example2-adapterconfig.yaml
+            job.yaml: examples/example2-job.yaml
+            #deployment.yaml: examples/provider-deployment.yaml
+        replicaCount: 1
+        deploymentMode: "dummy"
+        image:
+          registry: "quay.io/amarin"
+          repository: hyperfleet-adapter
+          tag: "dev-b35dda1"
+        serviceAccount:
+          create: true
+          name: adapter5
+          # No annotations needed - WIF grants permissions directly to K8s SA
+        broker:
+          create: true
+          type: googlepubsub
+          googlepubsub:
+            projectId: "hcm-hyperfleet"
+            subscriptionId: "amarin-ns1-clusters-validation-gcp-adapter"
+            topic: "amarin-ns1-clusters"  # From terraform output
+            deadLetterTopic: "amarin-ns1-clusters-dlq"  # From terraform output
+          subscriber:
+            parallelism: 1
+        hyperfleetApi:
+          baseUrl: "http://hyperfleet-api:8000"
+          version: "v1"
+        validation:
+          # Status reporter image (sidecar container)
+          statusReporterImage: "quay.io/amarin/REPOSITORY:TAG"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: amarin-ns1
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

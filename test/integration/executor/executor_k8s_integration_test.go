@@ -50,7 +50,12 @@ func newK8sTestAPIServer(t *testing.T) *k8sTestAPIServer {
 				"node_count": 3,
 			},
 			"status": map[string]interface{}{
-				"phase": "Ready",
+				"conditions": []map[string]interface{}{
+					{
+						"type":   "Ready",
+						"status": "True",
+					},
+				},
 			},
 		},
 		statusResponses: make([]map[string]interface{}, 0),
@@ -189,12 +194,17 @@ func createK8sTestConfig(apiBaseURL, testNamespace string) *config_loader.Adapte
 					},
 					Capture: []config_loader.CaptureField{
 						{Name: "clusterName", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "metadata.name"}},
-						{Name: "clusterPhase", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "status.phase"}},
+						{
+							Name: "readyConditionStatus",
+							FieldExpressionDef: config_loader.FieldExpressionDef{
+								Expression: `status.conditions.filter(c, c.type == "Ready").size() > 0 ? status.conditions.filter(c, c.type == "Ready")[0].status : "False"`,
+							},
+						},
 						{Name: "region", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "spec.region"}},
 						{Name: "cloudProvider", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "spec.provider"}},
 					},
 					Conditions: []config_loader.Condition{
-						{Field: "clusterPhase", Operator: "in", Value: []interface{}{"Provisioning", "Installing", "Ready"}},
+						{Field: "readyConditionStatus", Operator: "equals", Value: "True"},
 					},
 				},
 			},
@@ -219,7 +229,7 @@ func createK8sTestConfig(apiBaseURL, testNamespace string) *config_loader.Adapte
 							"cluster-name": "{{ .clusterName }}",
 							"region":       "{{ .region }}",
 							"provider":     "{{ .cloudProvider }}",
-							"phase":        "{{ .clusterPhase }}",
+							"readyStatus":  "{{ .readyConditionStatus }}",
 						},
 					},
 					Discovery: &config_loader.DiscoveryConfig{
@@ -385,7 +395,7 @@ func TestExecutor_K8s_CreateResources(t *testing.T) {
 	assert.Equal(t, "test-cluster", cmData["cluster-name"])
 	assert.Equal(t, "us-east-1", cmData["region"])
 	assert.Equal(t, "aws", cmData["provider"])
-	assert.Equal(t, "Ready", cmData["phase"])
+	assert.Equal(t, "True", cmData["readyStatus"])
 	t.Logf("ConfigMap data verified: %+v", cmData)
 
 	// Verify ConfigMap labels
@@ -455,8 +465,8 @@ func TestExecutor_K8s_UpdateExistingResource(t *testing.T) {
 				},
 			},
 			"data": map[string]interface{}{
-				"cluster-id": clusterId,
-				"phase":      "Provisioning", // Old value
+				"cluster-id":  clusterId,
+				"readyStatus": "False", // Old value
 			},
 		},
 	}
@@ -465,7 +475,7 @@ func TestExecutor_K8s_UpdateExistingResource(t *testing.T) {
 	ctx := context.Background()
 	_, err := k8sEnv.Client.CreateResource(ctx, existingCM)
 	require.NoError(t, err, "Failed to pre-create ConfigMap")
-	t.Logf("Pre-created ConfigMap with phase=Provisioning")
+	t.Logf("Pre-created ConfigMap with readyStatus=False")
 
 	// Create executor
 	config := createK8sTestConfig(mockAPI.URL(), testNamespace)
@@ -501,7 +511,7 @@ func TestExecutor_K8s_UpdateExistingResource(t *testing.T) {
 	require.NoError(t, err)
 
 	cmData, _, _ := unstructured.NestedStringMap(updatedCM.Object, "data")
-	assert.Equal(t, "Ready", cmData["phase"], "Phase should be updated to Ready")
+	assert.Equal(t, "True", cmData["readyStatus"], "readyStatus should be updated to True")
 	assert.Equal(t, "test-cluster", cmData["cluster-name"], "Should have new cluster-name field")
 	t.Logf("Updated ConfigMap data: %+v", cmData)
 
@@ -965,11 +975,18 @@ func TestExecutor_K8s_PostActionsAfterPreconditionNotMet(t *testing.T) {
 	mockAPI := newK8sTestAPIServer(t)
 	defer mockAPI.Close()
 
-	// Set cluster to Terminating phase (won't match condition)
+	// Set cluster to Ready condition False (won't match condition)
 	mockAPI.clusterResponse = map[string]interface{}{
 		"metadata": map[string]interface{}{"name": "test-cluster"},
 		"spec":     map[string]interface{}{"region": "us-east-1"},
-		"status":   map[string]interface{}{"phase": "Terminating"}, // Won't match
+		"status": map[string]interface{}{
+			"conditions": []map[string]interface{}{
+				{
+					"type":   "Ready",
+					"status": "False", // Won't match
+				},
+			},
+		},
 	}
 
 	t.Setenv("HYPERFLEET_API_BASE_URL", mockAPI.URL())

@@ -1,0 +1,186 @@
+# HyperFleet Adapter Configuration for Maestro ManifestWork
+#
+# This example demonstrates deploying resources to remote clusters via Maestro.
+# Instead of applying resources directly to the local cluster, the adapter creates
+# ManifestWork resources that Maestro agents apply on target clusters.
+
+apiVersion: hyperfleet.redhat.com/v1alpha1
+kind: AdapterConfig
+metadata:
+  name: example4-manifestwork
+  namespace: hyperfleet-system
+  labels:
+    hyperfleet.io/adapter-type: example4-manifestwork
+    hyperfleet.io/component: adapter
+
+spec:
+  adapter:
+    version: "0.1.0"
+
+  hyperfleetApi:
+    timeout: 2s
+    retryAttempts: 3
+    retryBackoff: exponential
+
+  kubernetes:
+    apiVersion: "v1"
+
+  # Maestro client configuration for remote cluster operations
+  maestro:
+    enabled: true
+    endpoint: "{{ .maestroApiUrl }}"
+    tls:
+      enabled: true
+      caFile: "/etc/maestro/certs/ca.crt"
+      certFile: "/etc/maestro/certs/hyperfleet-client.crt"
+      keyFile: "/etc/maestro/certs/hyperfleet-client.key"
+    timeout: 30s
+    retryAttempts: 3
+    retryBackoff: exponential
+
+  # Parameters with all required variables
+  params:
+    - name: "hyperfleetApiBaseUrl"
+      source: "env.HYPERFLEET_API_BASE_URL"
+      type: "string"
+      required: true
+
+    - name: "hyperfleetApiVersion"
+      source: "env.HYPERFLEET_API_VERSION"
+      type: "string"
+      default: "v1"
+
+    - name: "maestroApiUrl"
+      source: "env.MAESTRO_API_URL"
+      type: "string"
+      required: true
+
+    - name: "clusterId"
+      source: "event.id"
+      type: "string"
+      required: true
+
+    - name: "namespace"
+      source: "env.NAMESPACE"
+      type: "string"
+      required: true
+
+  # Preconditions: fetch cluster info from HyperFleet API
+  preconditions:
+    - name: "clusterStatus"
+      apiCall:
+        method: "GET"
+        url: "{{ .hyperfleetApiBaseUrl }}/api/hyperfleet/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}"
+        timeout: 10s
+        retryAttempts: 3
+        retryBackoff: "exponential"
+      capture:
+        - name: "clusterName"
+          field: "name"
+        - name: "generationSpec"
+          field: "generation"
+        # Capture the consumer name (Maestro target cluster identifier)
+        - name: "consumerName"
+          field: "maestro_consumer_name"
+        - name: "readyConditionStatus"
+          expression: |
+            status.conditions.filter(c, c.type == "Ready").size() > 0
+              ? status.conditions.filter(c, c.type == "Ready")[0].status
+              : "False"
+      conditions:
+        - field: "readyConditionStatus"
+          operator: "equals"
+          value: "False"
+
+    - name: "validationCheck"
+      expression: |
+        readyConditionStatus == "False"
+
+  # Resources deployed via Maestro to remote clusters
+  resources:
+    - name: "configmap"
+      # Transport mode: "maestro" routes through Maestro server
+      transport: "maestro"
+      # Target cluster for ManifestWork (resolved from captured params)
+      consumerName: "{{ .consumerName }}"
+      manifest:
+        ref: "/etc/adapter/configmap.yaml"
+      discovery:
+        namespace: "default"
+        bySelectors:
+          labelSelector:
+            hyperfleet.io/cluster-id: "{{ .clusterId }}"
+            hyperfleet.io/managed-by: "{{ .metadata.name }}"
+
+  # Post-processing: build and report status
+  post:
+    payloads:
+      - name: "manifestWorkStatusPayload"
+        build:
+          adapter: "{{ .metadata.name }}"
+          conditions:
+            # Applied: ManifestWork successfully created in Maestro
+            - type: "Applied"
+              status:
+                expression: |
+                  has(resources.configmap) ? "True" : "False"
+              reason:
+                expression: |
+                  has(resources.configmap)
+                    ? "ManifestWorkApplied"
+                    : "ManifestWorkPending"
+              message:
+                expression: |
+                  has(resources.configmap)
+                    ? "ManifestWork applied successfully via Maestro"
+                    : "ManifestWork is pending to be applied"
+
+            # Available: Check ManifestWork status from Maestro
+            - type: "Available"
+              status:
+                expression: |
+                  resources.?configmap.?status.?conditions.orValue([]).exists(c, c.type == "Applied" && c.status == "True")
+                    ? "True" : "False"
+              reason:
+                expression: |
+                  resources.?configmap.?status.?conditions.orValue([]).exists(c, c.type == "Applied" && c.status == "True")
+                    ? "ResourceAppliedOnRemote"
+                    : resources.?configmap.?status.?conditions.orValue([]).exists(c, c.type == "Applied" && c.status == "False")
+                      ? "ResourceApplyFailed"
+                      : "WaitingForRemoteApply"
+              message:
+                expression: |
+                  resources.?configmap.?status.?conditions.orValue([]).exists(c, c.type == "Applied" && c.status == "True")
+                    ? "Resource successfully applied on remote cluster via Maestro"
+                    : resources.?configmap.?status.?conditions.orValue([]).exists(c, c.type == "Applied" && c.status == "False")
+                      ? "Failed to apply resource on remote cluster"
+                      : "Waiting for Maestro agent to apply resource on remote cluster"
+
+            # Health: Adapter execution status
+            - type: "Health"
+              status:
+                expression: |
+                  adapter.?executionStatus.orValue("") == "success" ? "True" : (adapter.?executionStatus.orValue("") == "failed" ? "False" : "Unknown")
+              reason:
+                expression: |
+                  adapter.?errorReason.orValue("") != "" ? adapter.?errorReason.orValue("") : "Healthy"
+              message:
+                expression: |
+                  adapter.?errorMessage.orValue("") != "" ? adapter.?errorMessage.orValue("") : "All adapter operations completed successfully"
+
+          observed_generation:
+            expression: "generationSpec"
+          observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
+
+    postActions:
+      - name: "reportClusterStatus"
+        apiCall:
+          method: "POST"
+          url: "{{ .hyperfleetApiBaseUrl }}/api/hyperfleet/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/statuses"
+          body: "{{ .manifestWorkStatusPayload }}"
+          timeout: 30s
+          retryAttempts: 3
+          retryBackoff: "exponential"
+          headers:
+            - name: "Content-Type"
+              value: "application/json"

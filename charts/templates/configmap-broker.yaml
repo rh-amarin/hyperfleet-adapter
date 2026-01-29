@@ -1,0 +1,55 @@
+{{- if .Values.broker.create }}
+{{- $allowedTypes := list "googlepubsub" "rabbitmq" }}
+{{- $brokerType := include "hyperfleet-adapter.brokerType" . }}
+{{- if and $brokerType (not (has $brokerType $allowedTypes)) }}
+  {{- fail (printf "broker.type must be one of %s (got %q)" (join ", " $allowedTypes) $brokerType) }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hyperfleet-adapter.brokerConfigMapName" . }}
+  labels:
+    {{- include "hyperfleet-adapter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker-config
+    {{- if $brokerType }}
+    hyperfleet.io/broker-type: {{ $brokerType }}
+    {{- end }}
+data:
+  {{- if .Values.broker.env }}
+  # Additional broker environment variables
+  {{- range $key, $value := .Values.broker.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.broker.yaml }}
+  # Broker configuration file (broker.yaml)
+  broker.yaml: |
+{{ .Values.broker.yaml | indent 4 }}
+{{- else }}
+  {{- if eq $brokerType "googlepubsub" }}
+  BROKER_TOPIC: {{ .Values.broker.googlepubsub.topic | quote }}
+  BROKER_SUBSCRIPTION_ID: {{ .Values.broker.googlepubsub.subscriptionId | quote }}
+  broker.yaml: |
+
+    broker:
+      type: googlepubsub
+      googlepubsub:
+        project_id: {{ .Values.broker.googlepubsub.projectId | quote }}
+        topic: {{ .Values.broker.googlepubsub.topic | quote }}
+        deadLetterTopic: {{ .Values.broker.googlepubsub.deadLetterTopic | quote }}
+      subscriber:
+        parallelism: 1
+  {{- else if eq $brokerType "rabbitmq" }}
+  # RabbitMQ Configuration
+  broker.yaml: |
+
+    broker:
+      type: rabbitmq
+      rabbitmq:
+        url: {{ .Values.broker.rabbitmq.url | quote }}
+        queue: {{ .Values.broker.rabbitmq.queue | quote }}
+        exchange: {{ .Values.broker.rabbitmq.exchange | quote }}
+        routingKey: {{ .Values.broker.rabbitmq.routingKey | quote }}
+  {{- end }}
+  {{- end }}
+{{- end }}

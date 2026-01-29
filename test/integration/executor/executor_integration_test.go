@@ -434,11 +434,16 @@ func TestExecutor_CELExpressionEvaluation(t *testing.T) {
 			},
 			Capture: []config_loader.CaptureField{
 				{Name: "clusterName", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "metadata.name"}},
-				{Name: "clusterPhase", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "status.phase"}},
+				{
+					Name: "readyConditionStatus",
+					FieldExpressionDef: config_loader.FieldExpressionDef{
+						Expression: `status.conditions.filter(c, c.type == "Ready").size() > 0 ? status.conditions.filter(c, c.type == "Ready")[0].status : "False"`,
+					},
+				},
 				{Name: "nodeCount", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "spec.node_count"}},
 			},
 			// Use CEL expression instead of structured conditions
-			Expression: `clusterPhase == "Ready" && nodeCount >= 3`,
+			Expression: `readyConditionStatus == "True" && nodeCount >= 3`,
 		},
 	}
 
@@ -891,10 +896,15 @@ func TestExecutor_LogAction(t *testing.T) {
 						},
 					},
 					Capture: []config_loader.CaptureField{
-						{Name: "clusterPhase", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "status.phase"}},
+						{
+							Name: "readyConditionStatus",
+							FieldExpressionDef: config_loader.FieldExpressionDef{
+								Expression: `status.conditions.filter(c, c.type == "Ready").size() > 0 ? status.conditions.filter(c, c.type == "Ready")[0].status : "False"`,
+							},
+						},
 					},
 					Conditions: []config_loader.Condition{
-						{Field: "clusterPhase", Operator: "equals", Value: "Ready"},
+						{Field: "readyConditionStatus", Operator: "equals", Value: "True"},
 					},
 				},
 			},
@@ -1117,10 +1127,15 @@ func TestExecutor_ExecutionError_CELAccess(t *testing.T) {
 						},
 					},
 					Capture: []config_loader.CaptureField{
-						{Name: "clusterPhase", FieldExpressionDef: config_loader.FieldExpressionDef{Field: "status.phase"}},
+						{
+							Name: "readyConditionStatus",
+							FieldExpressionDef: config_loader.FieldExpressionDef{
+								Expression: `status.conditions.filter(c, c.type == "Ready").size() > 0 ? status.conditions.filter(c, c.type == "Ready")[0].status : "False"`,
+							},
+						},
 					},
 					Conditions: []config_loader.Condition{
-						{Field: "clusterPhase", Operator: "equals", Value: "Ready"},
+						{Field: "readyConditionStatus", Operator: "equals", Value: "True"},
 					},
 				},
 			},
