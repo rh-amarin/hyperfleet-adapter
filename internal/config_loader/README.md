@@ -71,7 +71,7 @@ spec:
   post: {...}
 ```
 
-See `configs/adapter-config-template.yaml` for the complete configuration reference.
+See `configs/adapterconfig-template.yaml` for the complete configuration reference.
 
 ## Validation
 
@@ -184,9 +184,12 @@ Captures values from API responses. Supports two modes (mutually exclusive):
 
 ```yaml
 capture:
-  # Simple dot notation
-  - name: "clusterPhase"
-    field: "status.phase"
+  # CEL expression for Ready condition status
+  - name: "readyConditionStatus"
+    expression: |
+      status.conditions.filter(c, c.type == "Ready").size() > 0
+        ? status.conditions.filter(c, c.type == "Ready")[0].status
+        : "False"
   
   # JSONPath for complex extraction
   - name: "lzStatus"
@@ -229,4 +232,3 @@ See `types.go` for complete definitions.
 
 - `internal/criteria` - Evaluates conditions
 - `internal/k8s_client` - Manages K8s resources
-- `configs/adapter-config-template.yaml` - Full config template

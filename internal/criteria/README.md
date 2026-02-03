@@ -9,7 +9,7 @@ This package is used to evaluate preconditions, post-conditions, and other crite
 ## Features
 
 - **Multiple Operators**: equals, notEquals, in, notIn, contains, greaterThan, lessThan, exists
-- **Nested Field Access**: Evaluate deeply nested fields using dot notation (e.g., `status.phase`)
+- **Nested Field Access**: Evaluate deeply nested fields using dot notation (e.g., `status.conditions`)
 - **JSONPath Support**: Extract complex values using Kubernetes JSONPath syntax
 - **Type Flexibility**: Handles strings, numbers, arrays, maps, and complex nested structures
 - **Context Management**: Maintain evaluation context with variable storage and retrieval
@@ -19,7 +19,7 @@ This package is used to evaluate preconditions, post-conditions, and other crite
 
 | Operator | Description | Example |
 |----------|-------------|---------|
-| `equals` | Field equals value | `clusterPhase == "Ready"` |
+| `equals` | Field equals value | `readyConditionStatus == "True"` |
 | `notEquals` | Field does not equal value | `status != "Failed"` |
 | `in` | Field is in a list of values | `provider in ["aws", "gcp", "azure"]` |
 | `notIn` | Field is not in a list of values | `phase notIn ["Terminating", "Failed"]` |
@@ -37,7 +37,7 @@ import "github.com/openshift-hyperfleet/hyperfleet-adapter/internal/criteria"
 
 // Create evaluation context
 ctx := criteria.NewEvaluationContext()
-ctx.Set("clusterPhase", "Ready")
+ctx.Set("readyConditionStatus", "True")
 ctx.Set("provider", "aws")
 ctx.Set("nodeCount", 5)
 
@@ -46,9 +46,9 @@ evaluator, _ := criteria.NewEvaluator(context.Background(), ctx, log)
 
 // Evaluate a single condition
 result, err := evaluator.EvaluateCondition(
-    "clusterPhase",
+    "readyConditionStatus",
     criteria.OperatorEquals,
-    "Ready",
+    "True",
 )
 if err != nil {
     log.Fatal(err)
@@ -62,7 +62,7 @@ fmt.Println("Cluster is ready:", result.Matched) // true
 // Multiple conditions (AND logic)
 // Use typed Operator constants for compile-time safety
 conditions := []criteria.ConditionDef{
-    {Field: "clusterPhase", Operator: criteria.OperatorIn, Value: []interface{}{"Provisioning", "Ready"}},
+    {Field: "readyConditionStatus", Operator: criteria.OperatorIn, Value: []interface{}{"True"}},
     {Field: "provider", Operator: criteria.OperatorIn, Value: []interface{}{"aws", "gcp", "azure"}},
     {Field: "nodeCount", Operator: criteria.OperatorGreaterThan, Value: 1},
 }
@@ -80,10 +80,9 @@ fmt.Println("All conditions pass:", result.Matched)
 // Set nested data
 ctx.Set("cluster", map[string]interface{}{
     "status": map[string]interface{}{
-        "phase": "Ready",
         "conditions": []interface{}{
             map[string]interface{}{
-                "type":   "Available",
+                "type":   "Ready",
                 "status": "True",
             },
         },
@@ -92,9 +91,9 @@ ctx.Set("cluster", map[string]interface{}{
 
 // Evaluate nested field
 result, err := evaluator.EvaluateCondition(
-    "cluster.status.phase",
+    "{.cluster.status.conditions[?(@.type=='Ready')].status}",
     criteria.OperatorEquals,
-    "Ready",
+    "True",
 )
 ```
 
@@ -142,7 +141,7 @@ The `ExtractValue` method provides a unified interface for extracting values usi
 
 ```go
 // Extract using JSONPath (using evaluator from Basic Evaluation example above)
-result, err := evaluator.ExtractValue("status.phase", "")
+result, err := evaluator.ExtractValue("{.status.conditions[?(@.type=='Ready')].status}", "")
 
 // Extract using CEL expression
 result, err = evaluator.ExtractValue("", "items.filter(i, i.status == 'active').size()")
@@ -184,7 +183,7 @@ ctx.Merge(ctx2) // ctx now has both key and newKey
 func (c *EvaluationContext) GetField(path string) (*FieldResult, error)
 ```
 
-Retrieves a field using dot notation (e.g., `"cluster.status.phase"`) or JSONPath (e.g., `"{.items[0].name}"`).
+Retrieves a field using dot notation (e.g., `"cluster.status.conditions"`) or JSONPath (e.g., `"{.items[0].name}"`).
 
 **Return Values:**
 
@@ -219,7 +218,7 @@ precond := config.GetPreconditionByName("clusterStatus")
 
 // Create evaluation context with API response data
 ctx := criteria.NewEvaluationContext()
-ctx.Set("clusterPhase", "Ready")
+ctx.Set("readyConditionStatus", "True")
 ctx.Set("cloudProvider", "aws")
 ctx.Set("vpcId", "vpc-12345")
 
@@ -312,15 +311,15 @@ go test -v ./internal/criteria/... -run Integration
 
 ## Configuration Template Examples
 
-See `configs/adapter-config-template.yaml` for examples of condition usage:
+See `configs/adapterconfig-template.yaml` for examples of condition usage:
 
 ```yaml
 preconditions:
   - name: "clusterStatus"
     conditions:
-      - field: "clusterPhase"
-        operator: "in"
-        value: ["Provisioning", "Installing", "Ready"]
+      - field: "readyConditionStatus"
+        operator: "equals"
+        value: "True"
       - field: "cloudProvider"
         operator: "in"
         value: ["aws", "gcp", "azure"]
