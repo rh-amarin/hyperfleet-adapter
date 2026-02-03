@@ -177,9 +177,12 @@ preconditions:
       method: "GET"
       url: "{{ .apiBaseUrl }}/clusters/{{ .clusterId }}"
     capture:
-      # Simple dot notation
-      - name: "clusterPhase"
-        field: "status.phase"
+      # CEL expression for Ready condition status
+      - name: "readyConditionStatus"
+        expression: |
+          status.conditions.filter(c, c.type == "Ready").size() > 0
+            ? status.conditions.filter(c, c.type == "Ready")[0].status
+            : "False"
       
       # JSONPath for complex extraction
       - name: "lzStatus"
@@ -190,9 +193,9 @@ preconditions:
         expression: "items.filter(i, i.status == 'active').size()"
     conditions:
       # Access captured values
-      - field: "clusterPhase"
-        operator: "in"
-        value: ["Ready", "Provisioning"]
+      - field: "readyConditionStatus"
+        operator: "equals"
+        value: "True"
       
       # Or dig directly into API response using precondition name
       - field: "checkClusterStatus.status.nodeCount"
@@ -201,7 +204,7 @@ preconditions:
 ```
 
 **Capture modes:**
-- `field`: Simple dot notation (`status.phase`) or JSONPath (`{.items[*].name}`)
+- `field`: Simple dot notation (`status.conditions`) or JSONPath (`{.items[*].name}`)
 - `expression`: CEL expression for computed values
 
 Only one of `field` or `expression` can be set per capture.
@@ -214,7 +217,7 @@ Preconditions have **two different data scopes** for capture and conditions:
 
 | Operation | Data Scope | Available Variables |
 |-----------|------------|---------------------|
-| **Capture** (`field`/`expression`) | API Response only | Only the parsed JSON response (e.g., `status.phase`, `items[0].name`) |
+| **Capture** (`field`/`expression`) | API Response only | Only the parsed JSON response (e.g., `status.conditions`, `items[0].name`) |
 | **Conditions** (`conditions`/`expression`) | Full execution context | `params.*`, `<precondition-name>.*`, `adapter.*`, `resources.*` |
 
 **Conditions scope details:**
@@ -222,7 +225,7 @@ Preconditions have **two different data scopes** for capture and conditions:
 | Variable | Source |
 |----------|--------|
 | `params.*` | Original extracted params |
-| `<precondition-name>.*` | Full API response from that precondition (e.g., `checkClusterStatus.status.phase`) |
+| `<precondition-name>.*` | Full API response from that precondition (e.g., `checkClusterStatus.status.conditions`) |
 | `capturedField` | Explicitly captured fields (added to params) |
 | `adapter.*` | Adapter metadata |
 | `resources.*` | Created resources (empty during preconditions) |
@@ -238,16 +241,12 @@ preconditions:
       method: GET
     # No need to capture everything - conditions can access full response
     conditions:
-      # Access response directly via precondition name
-      - field: "getCluster.status.phase"
-        operator: "equals"
-        value: "Ready"
       - field: "getCluster.spec.nodeCount"
         operator: "greaterThan"
         value: 0
     # Or use CEL expression with full access
     expression: |
-      getCluster.status.phase == "Ready" && 
+      getCluster.status.conditions.filter(c, c.type == "Ready")[0].status == "True" &&
       size(getCluster.spec.nodes) > 0
 ```
 
@@ -277,7 +276,7 @@ For complex conditions, use CEL expressions:
 preconditions:
   - name: "complexCheck"
     expression: |
-      clusterPhase == "Ready" && nodeCount >= 3
+      readyConditionStatus == "True" && nodeCount >= 3
 ```
 
 </details>
@@ -473,7 +472,7 @@ url: "{{ .apiBaseUrl }}/api/{{ .apiVersion }}/clusters/{{ .clusterId }}"
 | Source | Example |
 |--------|---------|
 | Extracted params | `{{ .clusterId }}` |
-| Captured fields | `{{ .clusterPhase }}` |
+| Captured fields | `{{ .readyConditionStatus }}` |
 | Adapter metadata | `{{ .metadata.name }}` |
 | Event metadata | `{{ .eventMetadata.id }}` |
 
