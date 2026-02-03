@@ -5,6 +5,7 @@ metadata:
   name: {{ include "hyperfleet-adapter.configMapName" . }}
   labels:
     {{- include "hyperfleet-adapter.labels" . | nindent 4 }}
+    {{- include "hyperfleet-adapter.adapterTypeLabels" . | nindent 4 }}
     app.kubernetes.io/component: adapter
 data:
   {{- if .Values.config.adapterType }}

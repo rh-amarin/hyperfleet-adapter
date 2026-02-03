@@ -1,3 +1,5 @@
+{{- $brokerConfigValid := include "hyperfleet-adapter.helmValidateBrokerIsConfigured" . }}
+{{- $adapterConfigValid := include "hyperfleet-adapter.helmValidateAdapterIsConfigured" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -31,8 +33,8 @@ spec:
   template:
     metadata:
       annotations:
-        {{- if .Values.config.enabled }}
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.adapterConfig.create }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-adapterconfig.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -53,16 +55,6 @@ spec:
       {{- end }}
       {{- if .Values.terminationGracePeriodSeconds }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
-      {{- end }}
-      {{- if .Values.hostNetwork }}
-      hostNetwork: {{ .Values.hostNetwork }}
-      {{- end }}
-      {{- if .Values.dnsPolicy }}
-      dnsPolicy: {{ .Values.dnsPolicy }}
-      {{- end }}
-      {{- with .Values.dnsConfig }}
-      dnsConfig:
-        {{- toYaml . | nindent 8 }}
       {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
@@ -88,189 +80,42 @@ spec:
           ports:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- $brokerEnabled := or .Values.broker.create .Values.broker.configMapName }}
-          {{- $hyperfleetApiEnabled := .Values.hyperfleetApi.baseUrl }}
-          {{- $hasEnv := or .Values.env $hyperfleetApiEnabled (and .Values.config.enabled (or .Values.config.env .Values.config.adapterType .Values.config.adapterYaml)) (and $brokerEnabled .Values.broker.yaml) (and $brokerEnabled .Values.broker.mountAsEnv .Values.broker.envKeys) }}
-          {{- if $hasEnv }}
           env:
             {{- with .Values.env }}
-            {{- range . }}
-            - name: {{ .name }}
-              {{- if .value }}
-              value: {{ .value | quote }}
-              {{- else if .valueFrom }}
-              valueFrom:
-                {{- toYaml .valueFrom | nindent 16 }}
-              {{- end }}
+              {{- toYaml . | nindent 12 }}
             {{- end }}
-            {{- end }}
-            {{- if .Values.hyperfleetApi.baseUrl }}
+            - name: LOG_LEVEL
+              value: {{ .Values.log.level }}
             - name: HYPERFLEET_API_BASE_URL
               value: {{ .Values.hyperfleetApi.baseUrl | quote }}
-            {{- end }}
-            {{- if .Values.hyperfleetApi.version }}
             - name: HYPERFLEET_API_VERSION
               value: {{ .Values.hyperfleetApi.version | quote }}
-            {{- end }}
-            {{- if .Values.config.enabled }}
-            {{- if .Values.config.env }}
-            {{- range $key, $value := .Values.config.env }}
-            - name: {{ $key }}
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "hyperfleet-adapter.configMapName" $ }}
-                  key: {{ $key }}
-            {{- end }}
-            {{- end }}
-            {{- if .Values.config.adapterType }}
-            - name: ADAPTER_TYPE
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "hyperfleet-adapter.configMapName" $ }}
-                  key: ADAPTER_TYPE
-            {{- end }}
-            {{- if .Values.config.adapterYaml }}
-            - name: ADAPTER_CONFIG_PATH
-              value: /etc/adapter/adapter.yaml
-            {{- end }}
-            {{- end }}
-            {{- if $brokerEnabled }}
-            {{- if .Values.broker.yaml }}
             - name: BROKER_CONFIG_FILE
               value: /etc/broker/broker.yaml
+            {{- $brokerType := include "hyperfleet-adapter.brokerType" . }}
+            {{- if eq $brokerType "googlepubsub" }}
+            - name: BROKER_SUBSCRIPTION_ID
+              value: {{ .Values.broker.googlepubsub.subscriptionId | quote }}
+            - name: BROKER_TOPIC
+              value: {{ .Values.broker.googlepubsub.topic | quote }}
             {{- end }}
-            {{- if and .Values.broker.mountAsEnv .Values.broker.envKeys }}
-            {{- range .Values.broker.envKeys }}
-            - name: {{ . }}
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "hyperfleet-adapter.brokerConfigMapName" $ }}
-                  key: {{ . }}
+            {{- if eq $brokerType "rabbitmq" }}
+            - name: BROKER_URL
+              value: {{ .Values.broker.rabbitmq.url | quote }}
+            - name: BROKER_QUEUE
+              value: {{ .Values.broker.rabbitmq.queue | quote }}
             {{- end }}
-            {{- end }}
-            {{- end }}
-          {{- end }}
-          {{- $brokerEnabled := or .Values.broker.create .Values.broker.configMapName }}
-          {{- if or .Values.envFrom (and $brokerEnabled .Values.broker.mountAsEnv (not .Values.broker.envKeys)) }}
-          envFrom:
-            {{- with .Values.envFrom }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-            {{- if and $brokerEnabled .Values.broker.mountAsEnv (not .Values.broker.envKeys) }}
-            - configMapRef:
-                name: {{ include "hyperfleet-adapter.brokerConfigMapName" . }}
-            {{- end }}
-          {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
-            {{- if .Values.livenessProbe.httpGet }}
-            httpGet:
-              path: {{ .Values.livenessProbe.httpGet.path | default "/healthz" }}
-              port: {{ .Values.livenessProbe.httpGet.port | default "http" }}
-              {{- if .Values.livenessProbe.httpGet.scheme }}
-              scheme: {{ .Values.livenessProbe.httpGet.scheme }}
-              {{- end }}
-            {{- else if .Values.livenessProbe.tcpSocket }}
-            tcpSocket:
-              port: {{ .Values.livenessProbe.tcpSocket.port }}
-            {{- else if .Values.livenessProbe.exec }}
-            exec:
-              command:
-                {{- toYaml .Values.livenessProbe.exec.command | nindent 16 }}
-            {{- else }}
-            httpGet:
-              path: /healthz
-              port: http
-            {{- end }}
-            {{- with .Values.livenessProbe.initialDelaySeconds }}
-            initialDelaySeconds: {{ . }}
-            {{- end }}
-            {{- with .Values.livenessProbe.periodSeconds }}
-            periodSeconds: {{ . }}
-            {{- end }}
-            {{- with .Values.livenessProbe.timeoutSeconds }}
-            timeoutSeconds: {{ . }}
-            {{- end }}
-            {{- with .Values.livenessProbe.failureThreshold }}
-            failureThreshold: {{ . }}
-            {{- end }}
-            {{- with .Values.livenessProbe.successThreshold }}
-            successThreshold: {{ . }}
-            {{- end }}
+            {{- include "hyperfleet-adapter.renderProbe" (dict "probe" .Values.livenessProbe "defaultPath" "/healthz" "defaultPort" "http") | nindent 12 }}
           {{- end }}
           {{- if .Values.readinessProbe.enabled }}
           readinessProbe:
-            {{- if .Values.readinessProbe.httpGet }}
-            httpGet:
-              path: {{ .Values.readinessProbe.httpGet.path | default "/readyz" }}
-              port: {{ .Values.readinessProbe.httpGet.port | default "http" }}
-              {{- if .Values.readinessProbe.httpGet.scheme }}
-              scheme: {{ .Values.readinessProbe.httpGet.scheme }}
-              {{- end }}
-            {{- else if .Values.readinessProbe.tcpSocket }}
-            tcpSocket:
-              port: {{ .Values.readinessProbe.tcpSocket.port }}
-            {{- else if .Values.readinessProbe.exec }}
-            exec:
-              command:
-                {{- toYaml .Values.readinessProbe.exec.command | nindent 16 }}
-            {{- else }}
-            httpGet:
-              path: /readyz
-              port: http
-            {{- end }}
-            {{- with .Values.readinessProbe.initialDelaySeconds }}
-            initialDelaySeconds: {{ . }}
-            {{- end }}
-            {{- with .Values.readinessProbe.periodSeconds }}
-            periodSeconds: {{ . }}
-            {{- end }}
-            {{- with .Values.readinessProbe.timeoutSeconds }}
-            timeoutSeconds: {{ . }}
-            {{- end }}
-            {{- with .Values.readinessProbe.failureThreshold }}
-            failureThreshold: {{ . }}
-            {{- end }}
-            {{- with .Values.readinessProbe.successThreshold }}
-            successThreshold: {{ . }}
-            {{- end }}
+            {{- include "hyperfleet-adapter.renderProbe" (dict "probe" .Values.readinessProbe "defaultPath" "/readyz" "defaultPort" "http") | nindent 12 }}
           {{- end }}
           {{- if .Values.startupProbe.enabled }}
           startupProbe:
-            {{- if .Values.startupProbe.httpGet }}
-            httpGet:
-              path: {{ .Values.startupProbe.httpGet.path | default "/healthz" }}
-              port: {{ .Values.startupProbe.httpGet.port | default "http" }}
-              {{- if .Values.startupProbe.httpGet.scheme }}
-              scheme: {{ .Values.startupProbe.httpGet.scheme }}
-              {{- end }}
-            {{- else if .Values.startupProbe.tcpSocket }}
-            tcpSocket:
-              port: {{ .Values.startupProbe.tcpSocket.port }}
-            {{- else if .Values.startupProbe.exec }}
-            exec:
-              command:
-                {{- toYaml .Values.startupProbe.exec.command | nindent 16 }}
-            {{- else }}
-            httpGet:
-              path: /healthz
-              port: http
-            {{- end }}
-            {{- with .Values.startupProbe.initialDelaySeconds }}
-            initialDelaySeconds: {{ . }}
-            {{- end }}
-            {{- with .Values.startupProbe.periodSeconds }}
-            periodSeconds: {{ . }}
-            {{- end }}
-            {{- with .Values.startupProbe.timeoutSeconds }}
-            timeoutSeconds: {{ . }}
-            {{- end }}
-            {{- with .Values.startupProbe.failureThreshold }}
-            failureThreshold: {{ . }}
-            {{- end }}
-            {{- with .Values.startupProbe.successThreshold }}
-            successThreshold: {{ . }}
-            {{- end }}
+            {{- include "hyperfleet-adapter.renderProbe" (dict "probe" .Values.startupProbe "defaultPath" "/healthz" "defaultPort" "http") | nindent 12 }}
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
@@ -278,53 +123,33 @@ spec:
           lifecycle:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- $brokerEnabled := or .Values.broker.create .Values.broker.configMapName }}
-          {{- $hasVolumeMounts := or (and .Values.config.enabled .Values.config.adapterYaml) (and $brokerEnabled .Values.broker.yaml) .Values.extraVolumeMounts }}
-          {{- if $hasVolumeMounts }}
           volumeMounts:
-            {{- if and .Values.config.enabled .Values.config.adapterYaml }}
-            - name: adapter-config
-              mountPath: /etc/adapter/adapter.yaml
-              subPath: adapter.yaml
+            - name: config
+              mountPath: /etc/adapter
               readOnly: true
-            {{- end }}
-            {{- if and $brokerEnabled .Values.broker.yaml }}
             - name: broker-config
               mountPath: /etc/broker/broker.yaml
               subPath: broker.yaml
               readOnly: true
-            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- end }}
         {{- with .Values.sidecarContainers }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- $brokerEnabled := or .Values.broker.create .Values.broker.configMapName }}
-      {{- $hasVolumes := or (and .Values.config.enabled .Values.config.adapterYaml) (and $brokerEnabled .Values.broker.yaml) .Values.extraVolumes }}
-      {{- if $hasVolumes }}
       volumes:
-        {{- if and .Values.config.enabled .Values.config.adapterYaml }}
-        - name: adapter-config
+        - name: config
           configMap:
-            name: {{ include "hyperfleet-adapter.configMapName" . }}
-            items:
-              - key: adapter.yaml
-                path: adapter.yaml
-        {{- end }}
-        {{- if and $brokerEnabled .Values.broker.yaml }}
+            name: {{ include "hyperfleet-adapter.adapterConfigMapName" . }}
         - name: broker-config
           configMap:
             name: {{ include "hyperfleet-adapter.brokerConfigMapName" . }}
             items:
               - key: broker.yaml
                 path: broker.yaml
-        {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -335,9 +160,5 @@ spec:
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.topologySpreadConstraints }}
-      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}

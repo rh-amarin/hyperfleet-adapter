@@ -1,0 +1,30 @@
+adapterConfig:
+  create: true
+  files:
+    adapterconfig.yaml: examples/example1-namespace/adapterconfig.yaml
+
+log:
+  level: debug
+
+broker:
+  create: true
+  googlepubsub:
+    projectId: CHANGE_ME
+    subscriptionId: CHANGE_ME
+    topic: CHANGE_ME
+    deadLetterTopic: CHANGE_ME
+
+image:
+  registry: CHANGE_ME
+  repository: hyperfleet-adapter
+  pullPolicy: Always
+  tag: latest
+
+rbac:
+   resources:
+     - namespaces
+     - serviceaccounts
+     - configmaps
+     - deployments
+     - roles
+     - rolebindings

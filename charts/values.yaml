@@ -1,13 +1,77 @@
 # Default values for hyperfleet-adapter
 # This is a YAML-formatted file.
 
+## Application configuration section
+## ================================
+# AdapterConfig can be created:
+# - option1: from an existing ConfigMap by setting configMapName
+# - option2: from a YAML file by setting yaml
+# - option3: from a set of files by setting files
+adapterConfig:
+  create: true
+
+  # option1: ConfigMap name (if different from default, and set create: false)
+  #configMapName: ""
+
+  # option2: Adapter YAML configuration (creates adapterconfig.yaml key in ConfigMap)
+  # yaml: 
+  #  apiVersion: hyperfleet.redhat.com/v1alpha1
+  #  kind: AdapterConfig
+
+  # option3: Task YAML files packaged with the chart
+  # files:
+    # adapterconfig.yaml: examples/provider-adapterconfig.yaml
+    # deployment.yaml: examples/provider-deployment.yaml
+
+
+# Broker configuration can be created:
+# - option1: from an existing ConfigMap by setting configMapName
+# - option2:  from a YAML file by setting yaml
+# - option3: from a set of properties under broker.googlepubsub, broker.rabbitmq, etc.
+broker:
+  create: true
+  # option1
+  # configMapName: ""
+  
+  # option2
+  # yaml: ""
+
+  # option3: Broker type identifier (googlepubsub, rabbitmq, etc.) - used as label
+  # Subscription ID for the adapter to consume from (BROKER_SUBSCRIPTION_ID env var)
+  googlepubsub:
+    projectId: ""
+    subscriptionId: ""
+    topic: ""
+    deadLetterTopic: ""
+  # option3: for rabbitmq
+  #rabbitmq:
+  # url: ""
+  # queue: ""
+  # exchange: ""
+  # routingKey: ""
+
+
+# HyperFleet API configuration
+hyperfleetApi:
+  # Base URL for HyperFleet API (HYPERFLEET_API_BASE_URL)
+  baseUrl: http://hyperfleet-api:8000
+  # API version (HYPERFLEET_API_VERSION), default: v1
+  version: "v1"
+
+log:
+  level: info
+
+## Kubernetes configuration section
+## ================================
+
 replicaCount: 1
 
+# This is the image for the adapter framework
 image:
-  registry: quay.io/openshift-hyperfleet
-  repository: hyperfleet-adapter
+  registry: CHANGE_ME # e.g. quay.io/openshift-hyperfleet
+  repository: CHANGE_ME # e.g. hyperfleet-adapter
   pullPolicy: Always
-  tag: "latest"
+  tag: CHANGE_ME # e.g. "latest"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -49,17 +113,36 @@ command:
 # Override default args
 args:
   - serve
+  - --config
+  - /etc/adapter/adapterconfig.yaml
 
 serviceAccount:
   # Specifies whether a service account should be created
   create: true
   # Annotations to add to the service account
-  # For GCP Workload Identity Federation (WIF), add:
-  #   iam.gke.io/gcp-service-account: GSA_NAME@PROJECT_ID.iam.gserviceaccount.com
   annotations: {}
   # The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
   name: ""
+
+# RBAC permissions are needed if the adapter task needs to interact with CLM cluster
+# e.g. if triggering a job that must update its status to report conditions
+rbac:
+  create: true
+  # Resources to grant full access (get, list, watch, create, update, patch, delete)
+  # apiGroup is auto-detected based on resource type
+  # resources:
+  #   - namespaces
+  #   - serviceaccounts
+  #   - configmaps
+  #   - deployments
+  #   - pods
+  #   - roles
+  #   - rolebindings
+  #   - jobs
+  #   - jobs/status
+  # Additional custom rules (appended to auto-generated rules)
+  rules: []
 
 podAnnotations: {}
 
@@ -124,22 +207,6 @@ priorityClassName: ""
 # Termination grace period in seconds
 terminationGracePeriodSeconds: 30
 
-# Use host network
-hostNetwork: false
-
-# DNS policy for the pod
-dnsPolicy: ""
-
-# Custom DNS configuration
-dnsConfig: {}
-  # nameservers:
-  #   - 8.8.8.8
-  # searches:
-  #   - default.svc.cluster.local
-  # options:
-  #   - name: ndots
-  #     value: "5"
-
 # Init containers
 initContainers: []
   # - name: init-myservice
@@ -159,15 +226,6 @@ tolerations: []
 
 affinity: {}
 
-# Topology spread constraints for pod distribution
-topologySpreadConstraints: []
-  # - maxSkew: 1
-  #   topologyKey: topology.kubernetes.io/zone
-  #   whenUnsatisfiable: DoNotSchedule
-  #   labelSelector:
-  #     matchLabels:
-  #       app.kubernetes.io/name: hyperfleet-adapter
-
 autoscaling:
   enabled: false
   minReplicas: 1
@@ -175,75 +233,6 @@ autoscaling:
   targetCPUUtilizationPercentage: 80
   targetMemoryUtilizationPercentage: 80
 
-# Adapter configuration
-config:
-  # Use ConfigMap for adapter config
-  # If enabled, creates a ConfigMap and mounts it
-  # If disabled, uses packaged config from image
-  enabled: true
-  # ConfigMap name (if different from default)
-  configMapName: ""
-  # Adapter type identifier (e.g., "example", "gcp", "aws")
-  adapterType: ""
-  # Environment variables for ConfigMap (matching adapter-configmap-template.yaml structure)
-  # Example for RabbitMQ:
-  #   BROKER_TYPE: "rabbitmq"
-  #   BROKER_HOST: "rabbitmq.hyperfleet-system.svc.cluster.local"
-  #   BROKER_PORT: "5672"
-  #   BROKER_QUEUE_NAME: "hyperfleet-cluster-events"
-  #   BROKER_EXCHANGE: "hyperfleet-events"
-  #   BROKER_MAX_CONCURRENCY: "100"
-  env: {}
-  # Alternative: YAML format configuration file (if adapter reads from adapter.yaml file)
-  # This will create adapter.yaml key in ConfigMap
-  adapterYaml: ""
-
-# Broker configuration
-broker:
-  # Create a broker ConfigMap (if false, you must provide an existing configMapName)
-  create: false
-  # Broker ConfigMap name
-  # If create=true and configMapName is empty, generates name from release
-  # If create=false, this must be an existing ConfigMap name
-  configMapName: ""
-  # Broker type identifier (googlepubsub, rabbitmq, etc.) - used as label
-  type: ""
-  # Subscription ID for the adapter to consume from (BROKER_SUBSCRIPTION_ID env var)
-  subscriptionId: ""
-  # Topic for the adapter to consume from (BROKER_TOPIC env var)
-  topic: ""
-  # Additional broker environment variables to add to ConfigMap
-  # Example:
-  #   BROKER_GOOGLEPUBSUB_PROJECT_ID: "my-gcp-project"
-  #   SUBSCRIBER_PARALLELISM: "10"
-  env: {}
-  # Broker YAML configuration file content
-  # When set, creates broker.yaml key in ConfigMap, mounts at /etc/broker/broker.yaml,
-  # and sets BROKER_CONFIG_FILE=/etc/broker/broker.yaml
-  # Example for Google Pub/Sub:
-  # yaml: |
-  #   broker:
-  #     type: googlepubsub
-  #     googlepubsub:
-  #       project_id: "my-gcp-project"
-  #       max_outstanding_messages: 1000
-  #       num_goroutines: 10
-  #   subscriber:
-  #     parallelism: 10
-  yaml: ""
-  # Mount broker ConfigMap env vars (BROKER_SUBSCRIPTION_ID, BROKER_TOPIC, etc.) via envFrom
-  # Set to false if you only need the broker.yaml file mounted
-  mountAsEnv: true
-  # List of specific environment variable keys to mount from broker ConfigMap
-  # If empty and mountAsEnv=true, all keys will be available via envFrom
-  envKeys: []
-
-# HyperFleet API configuration
-hyperfleetApi:
-  # Base URL for HyperFleet API (HYPERFLEET_API_BASE_URL)
-  baseUrl: ""
-  # API version (HYPERFLEET_API_VERSION), default: v1
-  version: "v1"
 
 # Environment variables
 env: []

@@ -11,7 +11,7 @@ HyperFleet Adapter - Event-driven adapter for HyperFleet cluster provisioning. C
 ## Installing the Chart
 
 ```bash
-helm install hyperfleet-adapter ./charts/
+helm install hyperfleet-adapter ./charts/ -f custom-values-file.yaml
 ```
 
 ## Uninstalling the Chart
@@ -33,45 +33,63 @@ helm delete hyperfleet-adapter
 | `image.pullPolicy` | Image pull policy | `Always` |
 | `command` | Container command | `["/app/adapter"]` |
 | `args` | Container arguments | `["serve"]` |
+| `log.level` | Adapter log level | `"info"` |
 
 ### ServiceAccount & Workload Identity
+
+If the adapter requires creating kubernetes objects in the cluster, it needs to create a serviceAccount with proper rbac permissions
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `serviceAccount.create` | Create ServiceAccount | `true` |
 | `serviceAccount.name` | ServiceAccount name (auto-generated if empty) | `""` |
-| `serviceAccount.annotations` | ServiceAccount annotations (for Workload Identity) | `{}` |
+| `rbac.resources` | Helper property to give CRUD permission for resources (pods, jobs...)| `""` |
+| `rbac.rules` | Fine grained permissions for the service account | `""` |
 
-### Adapter Configuration
+### Adapter + Task Configuration
+
+An adapter instance configures its behavior using a config file of `kind: AdapterConfig`, which can be:
+
+1. An existing configmap (using `adapterConfig.configMapName`), or it can be created by the Helm chart.
+1. Created via the helm chart, the `AdapterConfig` can be embedded in the same file as the `AdapterConfig` or providing an object of `files` referencing local files that will be added to a `ConfigMap`
+
+In both cases the `ConfigMap` will be mounted in the adapter pod at `/etc/adapter/adapterconfig.yaml`
+The purpose of adding more entries to the `files` object is for the `AdapterConfig` to reference external YAML files, so the whole `AdapterConfig` doesn't grow massively.
+
+Beware of template resolution within files referenced in an `AdapterConfig`. These files are not processed by Helm, but you can use go templates to resolve dynamic values (e.g. `property: "{{ .paramFromAdapterConfig }}"`)
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `config.enabled` | Enable adapter ConfigMap | `true` |
-| `config.configMapName` | Custom ConfigMap name | `""` |
-| `config.adapterType` | Adapter type identifier | `""` |
-| `config.env` | Environment variables for ConfigMap | `{}` |
-| `config.adapterYaml` | Adapter YAML config content | `""` |
-
-When `config.adapterYaml` is set:
-- Creates `adapter.yaml` key in ConfigMap
-- Mounts at `/etc/adapter/adapter.yaml`
-- Sets `ADAPTER_CONFIG_PATH=/etc/adapter/adapter.yaml`
+| `adapterConfig.create` | Enable adapter ConfigMap | `true` |
+| `adapterConfig.configMapName` | Custom ConfigMap name | `""` |
+| `adapterConfig.yaml` | Adapter YAML config content | `""` |
+| `adapterConfig.files` | Task YAML files packaged with chart | `{}` |
 
 ### Broker Configuration
 
+An adapter uses the hyperfleet-broker library to interact with a message broker, so the code in the adapter framework is broker agnostic.
+This `ConfigMap` can be:
+
+1. An existing `ConfigMap` referenced by the `broker.configMapName` property
+2. An embedded YAML file using `broker.yaml`
+3. Created out of individual properties that are broker specific (e.g. googlepubsub, rabbitmq)
+
+The `ConfigMap` will be:
+
+- Mounted at `/etc/broker/broker.yaml`
+- The library needs the environment variable  `BROKER_CONFIG_FILE=/etc/broker/broker.yaml`
+
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `broker.create` | Create broker ConfigMap | `false` |
+| `broker.create` | Create broker ConfigMap | `true` |
 | `broker.configMapName` | Broker ConfigMap name | `""` |
-| `broker.type` | Broker type (googlepubsub, rabbitmq) | `""` |
-| `broker.subscriptionId` | Subscription ID (BROKER_SUBSCRIPTION_ID) | `""` |
-| `broker.topic` | Topic name (BROKER_TOPIC) | `""` |
-| `broker.env` | Additional broker env vars | `{}` |
+| `broker.googlepubsub.projectId` |   Google Cloud project ID | `""` |
+| `broker.googlepubsub.subscriptionId` | Subscription ID (BROKER_SUBSCRIPTION_ID) | `""` |
+| `broker.googlepubsub.topic` | Topic name (BROKER_TOPIC) | `""` |
 | `broker.yaml` | Broker YAML config content | `""` |
-| `broker.mountAsEnv` | Mount ConfigMap as env vars via envFrom | `true` |
-| `broker.envKeys` | Specific keys to mount (empty = all via envFrom) | `[]` |
 
 When `broker.yaml` is set:
+
 - Creates `broker.yaml` key in ConfigMap
 - Mounts at `/etc/broker/broker.yaml`
 - Sets `BROKER_CONFIG_FILE=/etc/broker/broker.yaml`
@@ -80,7 +98,7 @@ When `broker.yaml` is set:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `hyperfleetApi.baseUrl` | HyperFleet API base URL (HYPERFLEET_API_BASE_URL) | `""` |
+| `hyperfleetApi.baseUrl` | HyperFleet API base URL (HYPERFLEET_API_BASE_URL) | `"http://hyperfleet-api:8000"` |
 | `hyperfleetApi.version` | API version (HYPERFLEET_API_VERSION) | `"v1"` |
 
 ### Resources
@@ -101,17 +119,16 @@ When `broker.yaml` is set:
 | `nodeSelector` | Node selector | `{}` |
 | `tolerations` | Tolerations | `[]` |
 | `affinity` | Affinity rules | `{}` |
-| `topologySpreadConstraints` | Topology spread constraints | `[]` |
 | `terminationGracePeriodSeconds` | Termination grace period | `30` |
 
-### Health Probes (Disabled by Default)
+### Health Probes (Enabled by Default)
 
-The adapter is a message consumer and doesn't expose HTTP endpoints by default.
+The adapter is a message consumer but exposes some HTTP endpoints by default.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `livenessProbe.enabled` | Enable liveness probe | `false` |
-| `readinessProbe.enabled` | Enable readiness probe | `false` |
+| `livenessProbe.enabled` | Enable liveness probe | `true` |
+| `readinessProbe.enabled` | Enable readiness probe | `true` |
 | `startupProbe.enabled` | Enable startup probe | `false` |
 
 ### Pod Disruption Budget
@@ -124,124 +141,16 @@ The adapter is a message consumer and doesn't expose HTTP endpoints by default.
 
 ## Examples
 
-### Basic Installation with Broker ConfigMap
+### Basic Installation
 
 ```bash
 helm install hyperfleet-adapter ./charts/ \
+  -f my-values.yaml \
+  --set image.registry=quay.io/my-quay-registry \
   --set broker.create=true \
-  --set broker.type=googlepubsub \
-  --set broker.subscriptionId=my-subscription \
-  --set broker.topic=my-topic
-```
-
-### With HyperFleet API Configuration
-
-```bash
-helm install hyperfleet-adapter ./charts/ \
-  --set hyperfleetApi.baseUrl=https://api.hyperfleet.example.com \
-  --set broker.create=true \
-  --set broker.subscriptionId=my-subscription \
-  --set broker.topic=my-topic
-```
-
-### With Full Configuration (Adapter + Broker)
-
-```bash
-helm install hyperfleet-adapter ./charts/ \
-  --set broker.create=true \
-  --set broker.type=googlepubsub \
-  --set broker.subscriptionId=my-subscription \
-  --set broker.topic=my-topic \
-  --set-file config.adapterYaml=./my-adapter-config.yaml \
-  --set-file broker.yaml=./my-broker-config.yaml
-```
-
-### With GCP Workload Identity
-
-```bash
-helm install hyperfleet-adapter ./charts/ \
-  --set broker.create=true \
-  --set broker.type=googlepubsub \
-  --set broker.subscriptionId=my-subscription \
-  --set broker.topic=my-topic \
-  --set 'serviceAccount.annotations.iam\.gke\.io/gcp-service-account=adapter@PROJECT.iam.gserviceaccount.com'
-```
-
-### Using Existing ServiceAccount
-
-```bash
-helm install hyperfleet-adapter ./charts/ \
-  --set serviceAccount.create=false \
-  --set serviceAccount.name=my-existing-sa
-```
-
-### Using Existing Broker ConfigMap
-
-```bash
-helm install hyperfleet-adapter ./charts/ \
-  --set broker.configMapName=existing-broker-config
-```
-
-### With Values File
-
-Create `my-values.yaml`:
-
-```yaml
-replicaCount: 2
-
-serviceAccount:
-  create: true
-  annotations:
-    iam.gke.io/gcp-service-account: adapter@my-project.iam.gserviceaccount.com
-
-hyperfleetApi:
-  baseUrl: https://api.hyperfleet.example.com
-  version: v1
-
-broker:
-  create: true
-  type: googlepubsub
-  subscriptionId: hyperfleet-adapter-subscription
-  topic: hyperfleet-events
-  yaml: |
-    broker:
-      type: googlepubsub
-      googlepubsub:
-        project_id: my-gcp-project
-        max_outstanding_messages: 1000
-        num_goroutines: 10
-    subscriber:
-      parallelism: 10
-
-config:
-  enabled: true
-  adapterYaml: |
-    apiVersion: hyperfleet.redhat.com/v1alpha1
-    kind: AdapterConfig
-    metadata:
-      name: my-adapter
-    spec:
-      adapter:
-        version: "1.0.0"
-      # ... rest of adapter config
-
-resources:
-  limits:
-    cpu: 1000m
-    memory: 1Gi
-  requests:
-    cpu: 200m
-    memory: 256Mi
-
-podDisruptionBudget:
-  enabled: true
-  minAvailable: 1
-```
-
-Install with values file:
-
-```bash
-helm install hyperfleet-adapter ./charts/ -f my-values.yaml
+  --set broker.googlepubsub.projectId=my-gcp-project \
+  --set broker.googlepubsub.subscriptionId=my-subscription \
+  --set broker.googlepubsub.topic=my-topic
 ```
 
 ## Environment Variables
@@ -252,16 +161,13 @@ The deployment sets these environment variables automatically:
 |----------|-------|-----------|
 | `HYPERFLEET_API_BASE_URL` | From `hyperfleetApi.baseUrl` | When `hyperfleetApi.baseUrl` is set |
 | `HYPERFLEET_API_VERSION` | From `hyperfleetApi.version` | Always (default: v1) |
-| `ADAPTER_CONFIG_PATH` | `/etc/adapter/adapter.yaml` | When `config.adapterYaml` is set |
 | `BROKER_CONFIG_FILE` | `/etc/broker/broker.yaml` | When `broker.yaml` is set |
-| `BROKER_SUBSCRIPTION_ID` | From ConfigMap | When `broker.subscriptionId` is set |
-| `BROKER_TOPIC` | From ConfigMap | When `broker.topic` is set |
-
-Additional env vars from `broker.env` are also loaded via `envFrom` when `broker.mountAsEnv: true`.
+| `BROKER_SUBSCRIPTION_ID` | From ConfigMap | When `broker.googlepubsub.subscriptionId` is set |
+| `BROKER_TOPIC` | From ConfigMap | When `broker.googlepubsub.topic` is set |
 
 ## GCP Workload Identity Setup
 
-To use GCP Pub/Sub with Workload Identity:
+To use GCP Pub/Sub with Workload Identity, a `principal` to a Kubernetes service account in the namespace is allowed the required roles (e.g. pubsub)
 
 ```bash
 # 1. Create Google Service Account
@@ -270,19 +176,6 @@ gcloud iam service-accounts create hyperfleet-adapter \
 
 # 2. Grant Pub/Sub permissions
 gcloud projects add-iam-policy-binding MY_PROJECT \
-  --member="serviceAccount:hyperfleet-adapter@MY_PROJECT.iam.gserviceaccount.com" \
+  --member="principal://iam.googleapis.com/projects/275239757837/locations/global/workloadIdentityPools/hcm-hyperfleet.svc.id.goog/subject/ns/amarin/sa/landing-zone" \
   --role="roles/pubsub.subscriber"
 
-# 3. Allow KSA to impersonate GSA
-gcloud iam service-accounts add-iam-policy-binding \
-  hyperfleet-adapter@MY_PROJECT.iam.gserviceaccount.com \
-  --role="roles/iam.workloadIdentityUser" \
-  --member="serviceAccount:MY_PROJECT.svc.id.goog[NAMESPACE/RELEASE-hyperfleet-adapter]"
-```
-
-## Notes
-
-- The adapter runs as non-root user (UID 65532) with read-only filesystem
-- Health probes are disabled by default (adapter is a message consumer, not HTTP server)
-- Uses `distroless` base image for minimal attack surface
-- Config checksum annotation triggers pod restart on ConfigMap changes
