@@ -26,7 +26,7 @@ adapterConfig:
 
 # Broker configuration can be created:
 # - option1: from an existing ConfigMap by setting configMapName
-# - option2:  from a YAML file by setting yaml
+# - option2: from a YAML file by setting yaml
 # - option3: from a set of properties under broker.googlepubsub, broker.rabbitmq, etc.
 broker:
   create: true

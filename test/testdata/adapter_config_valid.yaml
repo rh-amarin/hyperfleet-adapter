@@ -184,7 +184,7 @@ spec:
       - name: "reportClusterStatus"
         apiCall:
           method: "POST"
-          url: "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/status"
+          url: "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/statuses"
           headers:
             - name: "Content-Type"
               value: "application/json"

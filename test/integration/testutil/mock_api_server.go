@@ -96,8 +96,8 @@ func NewMockAPIServer(t *testing.T) *MockAPIServer {
 
 		// Route handling
 		switch {
-		case strings.Contains(r.URL.Path, "/clusters/") && strings.HasSuffix(r.URL.Path, "/status"):
-			// POST /clusters/{id}/status - Store status and return success (or fail if configured)
+		case strings.Contains(r.URL.Path, "/clusters/") && strings.HasSuffix(r.URL.Path, "/statuses"):
+			// POST /clusters/{id}/statuses - Store status and return success (or fail if configured)
 			if r.Method == http.MethodPost {
 				// Check if we should fail the post action
 				if mock.failPostAction {

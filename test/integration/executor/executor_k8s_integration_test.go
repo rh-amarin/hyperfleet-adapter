@@ -81,7 +81,7 @@ func newK8sTestAPIServer(t *testing.T) *k8sTestAPIServer {
 		t.Logf("Mock API: %s %s", r.Method, r.URL.Path)
 
 		switch {
-		case strings.Contains(r.URL.Path, "/clusters/") && strings.HasSuffix(r.URL.Path, "/status"):
+		case strings.Contains(r.URL.Path, "/clusters/") && strings.HasSuffix(r.URL.Path, "/statuses"):
 			if r.Method == http.MethodPost {
 				var statusBody map[string]interface{}
 				if err := json.Unmarshal([]byte(bodyStr), &statusBody); err == nil {
@@ -296,7 +296,7 @@ func createK8sTestConfig(apiBaseURL, testNamespace string) *config_loader.Adapte
 							Name: "reportClusterStatus",
 							APICall: &config_loader.APICall{
 								Method:  "POST",
-								URL:     "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/status",
+								URL:     "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/statuses",
 								Body:    "{{ .clusterStatusPayload }}",
 								Timeout: "5s",
 							},

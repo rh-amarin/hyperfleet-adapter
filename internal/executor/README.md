@@ -204,6 +204,7 @@ preconditions:
 ```
 
 **Capture modes:**
+
 - `field`: Simple dot notation (`status.conditions`) or JSONPath (`{.items[*].name}`)
 - `expression`: CEL expression for computed values
 
@@ -344,11 +345,12 @@ post:
     - name: "reportStatus"
       apiCall:
         method: "POST"
-        url: "{{ .apiBaseUrl }}/clusters/{{ .clusterId }}/status"
+        url: "{{ .apiBaseUrl }}/clusters/{{ .clusterId }}/statuses"
         body: "{{ .statusPayload }}"
 ```
 
 **Payload value types:**
+
 - Direct string: `message: "Success"` (Go template rendered)
 - Field extraction: `{ field: "path.to.field", default: "fallback" }`
 - CEL expression: `{ expression: "items.size() > 0", default: false }`
@@ -402,6 +404,7 @@ The executor distinguishes between **process execution status** and **business o
 ### Precondition Not Met (Business Outcome)
 
 When preconditions are not satisfied, the executor:
+
 1. Sets status to `success` (adapter executed successfully)
 2. Sets `ResourcesSkipped = true` (business outcome)
 3. Sets `SkipReason` with detailed explanation
@@ -413,6 +416,7 @@ When preconditions are not satisfied, the executor:
 ### Process Execution Errors
 
 Process execution errors are captured in `ExecutionResult` with:
+
 - `Status`: `failed`
 - `Errors`: map keyed by phase with the encountered error(s)
 - `CurrentPhase`: Phase where execution ended (may be post_actions even if earlier phase failed)
@@ -442,7 +446,7 @@ post:
     - name: "reportStatus"
       apiCall:
         method: "POST"
-        url: "{{ .apiBaseUrl }}/clusters/{{ .clusterId }}/status"
+        url: "{{ .apiBaseUrl }}/clusters/{{ .clusterId }}/statuses"
         body: "{{ .statusPayload }}"
 ```
 
@@ -532,4 +536,3 @@ assert.Equal(t, executor.StatusSuccess, result.Status)
 ```
 
 </details>
-

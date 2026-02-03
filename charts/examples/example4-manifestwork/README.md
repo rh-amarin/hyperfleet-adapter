@@ -22,7 +22,7 @@ This example showcases:
 
 ## Architecture
 
-```
+```text
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   HyperFleet    │     │    Maestro      │     │  Remote Cluster │
 │    Adapter      │────▶│    Server       │────▶│  (via Agent)    │

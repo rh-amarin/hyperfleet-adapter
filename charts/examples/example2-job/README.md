@@ -14,7 +14,7 @@ This example showcases:
 
 ## Files
 
-Note that the `job.yaml` used by the adapter is referenced as an external file usinig `ref` in the `AdapterConfig` configuration.
+Note that the `job.yaml` used by the adapter is referenced as an external file using `ref` in the `AdapterConfig` configuration.
 
 This file doesn't get variables resolved at Helm time but at runtime, therefore any value has to come from the adapter, e.g. using the `params` phase.
 

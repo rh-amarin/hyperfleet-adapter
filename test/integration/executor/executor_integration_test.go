@@ -568,7 +568,6 @@ func TestExecutor_Handler_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	err = handler(ctx, evt)
-
 	// Handler should return nil on success
 	if err != nil {
 		t.Errorf("Handler returned error: %v", err)
@@ -1073,7 +1072,7 @@ func TestExecutor_PostActionAPIFailure(t *testing.T) {
 	// Find the status POST request
 	var statusPostFound bool
 	for _, req := range requests {
-		if req.Method == http.MethodPost && strings.Contains(req.Path, "/status") {
+		if req.Method == http.MethodPost && strings.Contains(req.Path, "/statuses") {
 			statusPostFound = true
 			t.Logf("Status POST was attempted: %s %s", req.Method, req.Path)
 		}
@@ -1317,7 +1316,7 @@ func TestExecutor_PayloadBuildFailure(t *testing.T) {
 							Name: "shouldNotExecute",
 							APICall: &config_loader.APICall{
 								Method:  "POST",
-								URL:     "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/status",
+								URL:     "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/statuses",
 								Body:    "{{ .badPayload }}",
 								Timeout: "5s",
 							},
@@ -1383,7 +1382,7 @@ func TestExecutor_PayloadBuildFailure(t *testing.T) {
 	// Verify NO API call was made to the post action endpoint (blocked)
 	requests := mockAPI.GetRequests()
 	for _, req := range requests {
-		if req.Method == http.MethodPost && strings.Contains(req.Path, "/status") {
+		if req.Method == http.MethodPost && strings.Contains(req.Path, "/statuses") {
 			t.Errorf("Post action API call should NOT have been made (blocked by payload build failure)")
 		}
 	}

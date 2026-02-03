@@ -86,7 +86,7 @@ spec:
       - name: reportClusterStatus
         apiCall:
           method: POST
-          url: "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/status"
+          url: "{{ .hyperfleetApiBaseUrl }}/api/{{ .hyperfleetApiVersion }}/clusters/{{ .clusterId }}/statuses"
           body: "{{ .clusterStatusPayload }}"
           timeout: 5s
 

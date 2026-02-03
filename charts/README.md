@@ -65,7 +65,7 @@ Beware of template resolution within files referenced in an `AdapterConfig`. The
 | `adapterConfig.yaml` | Adapter YAML config content | `""` |
 | `adapterConfig.files` | Task YAML files packaged with chart | `{}` |
 
-When `config.adapterYaml` is set:
+When `adapterConfig.create` is set:
 
 - Creates `adapter.yaml` key in ConfigMap
 - Mounts at `/etc/adapter/adapter.yaml`

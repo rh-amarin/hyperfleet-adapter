@@ -27,10 +27,7 @@ data:
 {{ .Values.broker.yaml | indent 4 }}
 {{- else }}
   {{- if eq $brokerType "googlepubsub" }}
-  BROKER_TOPIC: {{ .Values.broker.googlepubsub.topic | quote }}
-  BROKER_SUBSCRIPTION_ID: {{ .Values.broker.googlepubsub.subscriptionId | quote }}
   broker.yaml: |
-
     broker:
       type: googlepubsub
       googlepubsub:
@@ -42,7 +39,6 @@ data:
   {{- else if eq $brokerType "rabbitmq" }}
   # RabbitMQ Configuration
   broker.yaml: |
-
     broker:
       type: rabbitmq
       rabbitmq:
