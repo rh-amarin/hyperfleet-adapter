@@ -161,7 +161,7 @@ spec:
 
       # Status reporter sidecar
       - name: status-reporter
-        image: quay.io/amarin/status-reporter:dev-40317e8
+        image: registry.ci.openshift.org/ci/status-reporter:latest
         imagePullPolicy: Always
         env:
         # Required environment variables
