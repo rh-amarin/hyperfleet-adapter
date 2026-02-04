@@ -3,9 +3,8 @@ adapterConfig:
   files:
     adapterconfig.yaml: examples/example4-manifestwork/adapterconfig.yaml
     configmap.yaml: examples/example4-manifestwork/configmap.yaml
-
-log:
-  level: debug
+  log:
+    level: debug
 
 broker:
   create: true

@@ -3,9 +3,8 @@ adapterConfig:
   files:
     adapterconfig.yaml: examples/example3-deployment/adapterconfig.yaml
     deployment.yaml: examples/example3-deployment/deployment.yaml
-
-log:
-  level: debug
+  log:
+    level: debug
 
 broker:
   create: true

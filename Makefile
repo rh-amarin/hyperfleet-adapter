@@ -236,8 +236,8 @@ test-helm: ## 📊 Test Helm charts (lint, template, validate)
 	@echo ""
 	@echo "📋 Testing template with HyperFleet API config..."
 	helm template test-release charts/ \
-		--set hyperfleetApi.baseUrl=http://localhost:8000 \
-		--set hyperfleetApi.version=v1 > /dev/null
+		--set adapterConfig.hyperfleetApi.baseUrl=http://localhost:8000 \
+		--set adapterConfig.hyperfleetApi.version=v1 > /dev/null
 	@echo "✅ HyperFleet API config template OK"
 	@echo ""
 	@echo "📋 Testing template with PDB enabled..."

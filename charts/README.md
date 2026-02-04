@@ -33,7 +33,6 @@ helm delete hyperfleet-adapter
 | `image.pullPolicy` | Image pull policy | `Always` |
 | `command` | Container command | `["/app/adapter"]` |
 | `args` | Container arguments | `["serve"]` |
-| `log.level` | Adapter log level | `"info"` |
 
 ### ServiceAccount & Workload Identity
 
@@ -64,6 +63,9 @@ Beware of template resolution within files referenced in an `AdapterConfig`. The
 | `adapterConfig.configMapName` | Custom ConfigMap name | `""` |
 | `adapterConfig.yaml` | Adapter YAML config content | `""` |
 | `adapterConfig.files` | Task YAML files packaged with chart | `{}` |
+| `adapterConfig.hyperfleetApi.baseUrl` | HyperFleet API base URL (HYPERFLEET_API_BASE_URL) | `"http://hyperfleet-api:8000"` |
+| `adapterConfig.hyperfleetApi.version` | API version (HYPERFLEET_API_VERSION) | `"v1"` |
+| `adapterConfig.log.level` | Adapter log level | `"info"` |
 
 When `adapterConfig.create` is set:
 
@@ -99,13 +101,6 @@ When `broker.yaml` is set:
 - Creates `broker.yaml` key in ConfigMap
 - Mounts at `/etc/broker/broker.yaml`
 - Sets `BROKER_CONFIG_FILE=/etc/broker/broker.yaml`
-
-### HyperFleet API Configuration
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `hyperfleetApi.baseUrl` | HyperFleet API base URL (HYPERFLEET_API_BASE_URL) | `"http://hyperfleet-api:8000"` |
-| `hyperfleetApi.version` | API version (HYPERFLEET_API_VERSION) | `"v1"` |
 
 ### Resources
 
@@ -165,8 +160,8 @@ The deployment sets these environment variables automatically:
 
 | Variable | Value | Condition |
 |----------|-------|-----------|
-| `HYPERFLEET_API_BASE_URL` | From `hyperfleetApi.baseUrl` | When `hyperfleetApi.baseUrl` is set |
-| `HYPERFLEET_API_VERSION` | From `hyperfleetApi.version` | Always (default: v1) |
+| `HYPERFLEET_API_BASE_URL` | From `adapterConfig.hyperfleetApi.baseUrl` | When `adapterConfig.hyperfleetApi.baseUrl` is set |
+| `HYPERFLEET_API_VERSION` | From `adapterConfig.hyperfleetApi.version` | Always (default: v1) |
 | `BROKER_CONFIG_FILE` | `/etc/broker/broker.yaml` | When `broker.yaml` is set |
 | `BROKER_SUBSCRIPTION_ID` | From ConfigMap | When `broker.googlepubsub.subscriptionId` is set |
 | `BROKER_TOPIC` | From ConfigMap | When `broker.googlepubsub.topic` is set |

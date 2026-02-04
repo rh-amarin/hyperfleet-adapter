@@ -85,11 +85,11 @@ spec:
               {{- toYaml . | nindent 12 }}
             {{- end }}
             - name: LOG_LEVEL
-              value: {{ .Values.log.level }}
+              value: {{ .Values.adapterConfig.log.level }}
             - name: HYPERFLEET_API_BASE_URL
-              value: {{ .Values.hyperfleetApi.baseUrl | quote }}
+              value: {{ .Values.adapterConfig.hyperfleetApi.baseUrl | quote }}
             - name: HYPERFLEET_API_VERSION
-              value: {{ .Values.hyperfleetApi.version | quote }}
+              value: {{ .Values.adapterConfig.hyperfleetApi.version | quote }}
             - name: BROKER_CONFIG_FILE
               value: /etc/broker/broker.yaml
             {{- $brokerType := include "hyperfleet-adapter.brokerType" . }}

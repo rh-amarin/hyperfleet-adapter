@@ -22,6 +22,15 @@ adapterConfig:
   # files:
     # adapterconfig.yaml: examples/provider-adapterconfig.yaml
     # deployment.yaml: examples/provider-deployment.yaml
+  # HyperFleet API configuration
+  hyperfleetApi:
+    # Base URL for HyperFleet API (HYPERFLEET_API_BASE_URL)
+    baseUrl: http://hyperfleet-api:8000
+    # API version (HYPERFLEET_API_VERSION), default: v1
+    version: "v1"
+
+  log:
+    level: info
 
 
 # Broker configuration can be created:
@@ -51,15 +60,6 @@ broker:
   # routingKey: ""
 
 
-# HyperFleet API configuration
-hyperfleetApi:
-  # Base URL for HyperFleet API (HYPERFLEET_API_BASE_URL)
-  baseUrl: http://hyperfleet-api:8000
-  # API version (HYPERFLEET_API_VERSION), default: v1
-  version: "v1"
-
-log:
-  level: info
 
 ## Kubernetes configuration section
 ## ================================

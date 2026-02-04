@@ -2,9 +2,8 @@ adapterConfig:
   create: true
   files:
     adapterconfig.yaml: examples/example1-namespace/adapterconfig.yaml
-
-log:
-  level: debug
+  log:
+    level: debug
 
 broker:
   create: true

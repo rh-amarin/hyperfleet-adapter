@@ -3,9 +3,8 @@ adapterConfig:
   files:
     adapterconfig.yaml: examples/example2-job/adapterconfig.yaml
     job.yaml : examples/example2-job/job.yaml
-
-log:
-  level: debug
+  log:
+    level: debug
 
 broker:
   create: true
