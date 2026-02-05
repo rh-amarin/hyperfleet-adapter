@@ -5,13 +5,23 @@
 #   - Authentication and TLS configuration
 #   - Connection timeouts and retry policies
 #
-# This is the minimal default configuration packaged with the container image.
-# In production, this should be overridden via:
-#   1. HYPERFLEET_ADAPTER_DEPLOYMENT_CONFIG environment variable (highest priority)
-#   2. ConfigMap mounted at /etc/adapter/adapter-deployment-config.yaml
+# NOTE: This is a SAMPLE configuration file for reference and local development.
+# It is NOT automatically packaged with the container image (see Dockerfile).
+#
+# In production, provide configuration via one of these methods:
+#   1. ADAPTER_CONFIG_PATH environment variable pointing to a config file (highest priority)
+#   2. ConfigMap mounted at /etc/adapter/config/adapter-deployment-config.yaml
+#
+# Example Kubernetes deployment:
+#   env:
+#     - name: ADAPTER_CONFIG_PATH
+#       value: /etc/adapter/config/adapter-deployment-config.yaml
+#   volumeMounts:
+#     - name: config
+#       mountPath: /etc/adapter/config
 #
 # For business logic configuration (params, preconditions, resources, post-actions),
-# use a separate business config file. See configs/adapter-workflow-config-template.yaml
+# use a separate business config file. See configs/adapter-config-template.yaml
 
 apiVersion: hyperfleet.redhat.com/v1alpha1
 kind: AdapterDeploymentConfig

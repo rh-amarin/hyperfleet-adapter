@@ -43,11 +43,7 @@ func TestLoadTemplateConfig(t *testing.T) {
 	t.Setenv("HYPERFLEET_API_TOKEN", "test-token-for-integration-tests")
 
 	projectRoot := getProjectRoot()
-<<<<<<< HEAD
 	configPath := filepath.Join(projectRoot, "configs/adapterconfig-template.yaml")
-=======
-	configPath := filepath.Join(projectRoot, "test/integration/config-loader/testdata/adapter-config-template.yaml")
->>>>>>> 1e51a34 (fix: Moved version to a package version and fixed maestro integration running failure)
 
 	config, err := config_loader.Load(configPath)
 	require.NoError(t, err, "should be able to load template config")
@@ -74,7 +70,7 @@ func TestLoadTemplateConfig(t *testing.T) {
 	// Check specific params (using accessor method)
 	clusterIdParam := config.GetParamByName("clusterId")
 	require.NotNil(t, clusterIdParam, "clusterId parameter should exist")
-	assert.Equal(t, "event.cluster_id", clusterIdParam.Source)
+	assert.Equal(t, "event.id", clusterIdParam.Source)
 	assert.True(t, clusterIdParam.Required)
 
 	// Verify preconditions
@@ -92,18 +88,13 @@ func TestLoadTemplateConfig(t *testing.T) {
 	// Verify captured fields
 	clusterNameCapture := findCaptureByName(firstPrecond.Capture, "clusterName")
 	require.NotNil(t, clusterNameCapture)
-	assert.Equal(t, "metadata.name", clusterNameCapture.Field)
+	assert.Equal(t, "name", clusterNameCapture.Field)
 
 	// Verify conditions in precondition
 	assert.GreaterOrEqual(t, len(firstPrecond.Conditions), 1)
 	firstCondition := firstPrecond.Conditions[0]
-<<<<<<< HEAD
 	assert.Equal(t, "readyConditionStatus", firstCondition.Field)
 	assert.Equal(t, "equals", firstCondition.Operator)
-=======
-	assert.Equal(t, "clusterPhase", firstCondition.Field)
-	assert.Equal(t, "in", firstCondition.Operator)
->>>>>>> 1e51a34 (fix: Moved version to a package version and fixed maestro integration running failure)
 
 	// Verify resources
 	assert.NotEmpty(t, config.Spec.Resources)

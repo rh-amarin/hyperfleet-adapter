@@ -129,17 +129,11 @@ func TestMaestroClientCreateManifestWork(t *testing.T) {
 	// Create the ManifestWork
 	created, err := tc.Client.CreateManifestWork(tc.Ctx, consumerName, work)
 
-	// Note: This may fail if the consumer doesn't exist in Maestro
-	// The test validates the client can communicate with Maestro
-	if err != nil {
-		t.Logf("CreateManifestWork returned error (may be expected if consumer not registered): %v", err)
-		// Test passes - we successfully communicated with Maestro (even if it returned an error)
-		// Errors can be consumer-related, connection issues, or other API errors
-	} else {
-		assert.NotNil(t, created)
-		assert.Equal(t, work.Name, created.Name)
-		t.Logf("Created ManifestWork: %s/%s", created.Namespace, created.Name)
-	}
+	// Consumer should be registered during test setup, so this should succeed
+	require.NoError(t, err, "CreateManifestWork should succeed (consumer %s should be registered)", consumerName)
+	require.NotNil(t, created)
+	assert.Equal(t, work.Name, created.Name)
+	t.Logf("Created ManifestWork: %s/%s", created.Namespace, created.Name)
 }
 
 // TestMaestroClientListManifestWorks tests listing ManifestWorks
@@ -152,13 +146,10 @@ func TestMaestroClientListManifestWorks(t *testing.T) {
 	// List ManifestWorks (empty label selector = list all)
 	list, err := tc.Client.ListManifestWorks(tc.Ctx, consumerName, "")
 
-	// This may return empty or error depending on whether consumer exists
-	if err != nil {
-		t.Logf("ListManifestWorks returned error (may be expected): %v", err)
-	} else {
-		assert.NotNil(t, list)
-		t.Logf("Found %d ManifestWorks for consumer %s", len(list.Items), consumerName)
-	}
+	// Consumer should be registered during test setup, so this should succeed
+	require.NoError(t, err, "ListManifestWorks should succeed (consumer %s should be registered)", consumerName)
+	require.NotNil(t, list)
+	t.Logf("Found %d ManifestWorks for consumer %s", len(list.Items), consumerName)
 }
 
 // TestMaestroClientApplyManifestWork tests the apply (create or update) operation
@@ -212,27 +203,23 @@ func TestMaestroClientApplyManifestWork(t *testing.T) {
 	// Apply the ManifestWork (should create if not exists)
 	applied, err := tc.Client.ApplyManifestWork(tc.Ctx, consumerName, work)
 
-	if err != nil {
-		t.Logf("ApplyManifestWork returned error (may be expected if consumer not registered): %v", err)
-	} else {
-		assert.NotNil(t, applied)
-		t.Logf("Applied ManifestWork: %s/%s", applied.Namespace, applied.Name)
+	// Consumer should be registered during test setup, so this should succeed
+	require.NoError(t, err, "ApplyManifestWork should succeed (consumer %s should be registered)", consumerName)
+	require.NotNil(t, applied)
+	t.Logf("Applied ManifestWork: %s/%s", applied.Namespace, applied.Name)
 
-		// Now apply again with updated generation (should update)
-		work.Annotations[constants.AnnotationGeneration] = "2"
-		configMapManifest["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})[constants.AnnotationGeneration] = "2"
-		configMapManifest["data"].(map[string]interface{})["key2"] = "value2"
-		configMapJSON, _ = json.Marshal(configMapManifest)
-		work.Spec.Workload.Manifests[0].Raw = configMapJSON
+	// Now apply again with updated generation (should update)
+	work.Annotations[constants.AnnotationGeneration] = "2"
+	// Safe: manifest structure is defined above in this test with known nested maps
+	configMapManifest["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})[constants.AnnotationGeneration] = "2"
+	configMapManifest["data"].(map[string]interface{})["key2"] = "value2"
+	configMapJSON, _ = json.Marshal(configMapManifest)
+	work.Spec.Workload.Manifests[0].Raw = configMapJSON
 
-		updated, err := tc.Client.ApplyManifestWork(tc.Ctx, consumerName, work)
-		if err != nil {
-			t.Logf("ApplyManifestWork (update) returned error: %v", err)
-		} else {
-			assert.NotNil(t, updated)
-			t.Logf("Updated ManifestWork: %s/%s", updated.Namespace, updated.Name)
-		}
-	}
+	updated, err := tc.Client.ApplyManifestWork(tc.Ctx, consumerName, work)
+	require.NoError(t, err, "ApplyManifestWork (update) should succeed")
+	require.NotNil(t, updated)
+	t.Logf("Updated ManifestWork: %s/%s", updated.Namespace, updated.Name)
 }
 
 // TestMaestroClientGenerationSkip tests that apply skips when generation matches

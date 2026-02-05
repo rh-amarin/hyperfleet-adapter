@@ -32,11 +32,7 @@ func getConfigPath() string {
 	if envPath := os.Getenv("ADAPTER_CONFIG_PATH"); envPath != "" {
 		return envPath
 	}
-<<<<<<< HEAD
 	return filepath.Join(getProjectRoot(), "configs/adapterconfig-template.yaml")
-=======
-	return filepath.Join(getProjectRoot(), "test/integration/config-loader/testdata/adapter-config-template.yaml")
->>>>>>> 1e51a34 (fix: Moved version to a package version and fixed maestro integration running failure)
 }
 
 // TestConfigLoadAndCriteriaEvaluation tests loading config and evaluating preconditions
@@ -51,13 +47,8 @@ func TestConfigLoadAndCriteriaEvaluation(t *testing.T) {
 	ctx := criteria.NewEvaluationContext()
 
 	// Simulate data extracted from HyperFleet API response
-<<<<<<< HEAD
 	// NOTE: readyConditionStatus must match the condition in the template (True)
 	ctx.Set("readyConditionStatus", "True")
-=======
-	// NOTE: clusterPhase must match the condition in the template: in [Provisioning, Installing, Ready]
-	ctx.Set("clusterPhase", "Ready")
->>>>>>> 1e51a34 (fix: Moved version to a package version and fixed maestro integration running failure)
 	ctx.Set("cloudProvider", "aws")
 	ctx.Set("vpcId", "vpc-12345")
 	ctx.Set("region", "us-east-1")

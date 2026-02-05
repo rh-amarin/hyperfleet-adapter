@@ -321,8 +321,10 @@ func (c *httpClient) doRequest(ctx context.Context, req *Request) (*Response, er
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
 
-	// Set User-Agent header
-	httpReq.Header.Set("User-Agent", version.UserAgent())
+	// Set User-Agent header (respect explicit caller override)
+	if httpReq.Header.Get("User-Agent") == "" {
+		httpReq.Header.Set("User-Agent", version.UserAgent())
+	}
 
 	// Inject OpenTelemetry trace context into headers (W3C Trace Context format)
 	// This propagates trace_id and span_id via the 'traceparent' header

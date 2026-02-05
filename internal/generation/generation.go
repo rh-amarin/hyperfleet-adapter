@@ -243,17 +243,21 @@ func GetLatestGenerationFromList(list *unstructured.UnstructuredList) *unstructu
 		return nil
 	}
 
+	// Copy items to avoid modifying input
+	items := make([]unstructured.Unstructured, len(list.Items))
+	copy(items, list.Items)
+
 	// Sort by generation annotation (descending) to return the one with the latest generation
 	// Secondary sort by metadata.name for consistency when generations are equal
-	sort.Slice(list.Items, func(i, j int) bool {
-		genI := GetGenerationFromUnstructured(&list.Items[i])
-		genJ := GetGenerationFromUnstructured(&list.Items[j])
+	sort.Slice(items, func(i, j int) bool {
+		genI := GetGenerationFromUnstructured(&items[i])
+		genJ := GetGenerationFromUnstructured(&items[j])
 		if genI != genJ {
 			return genI > genJ // Descending order - latest generation first
 		}
 		// Fall back to metadata.name for deterministic ordering when generations are equal
-		return list.Items[i].GetName() < list.Items[j].GetName()
+		return items[i].GetName() < items[j].GetName()
 	})
 
-	return &list.Items[0]
+	return &items[0]
 }

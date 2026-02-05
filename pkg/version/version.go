@@ -24,8 +24,8 @@ var (
 )
 
 // UserAgent returns the User-Agent string for HTTP clients.
-// It first checks the USER_AGENT environment variable, and if not set,
-// returns the default "hyperfleet-adapter/{version}" string.
+// It first checks the HYPERFLEET_USER_AGENT environment variable (EnvUserAgent),
+// and if not set, returns the default "hyperfleet-adapter/{version}" string.
 func UserAgent() string {
 	if ua := os.Getenv(EnvUserAgent); ua != "" {
 		return ua

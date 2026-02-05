@@ -28,24 +28,6 @@ WORKDIR /app
 # Copy binary from builder (make build outputs to bin/)
 COPY --from=builder /build/bin/hyperfleet-adapter /app/adapter
 
-<<<<<<< HEAD
-=======
-# Config files are NOT packaged in the image - they must come from ConfigMaps
-# Mount the adapter config via ConfigMap at deployment time:
-#   volumeMounts:
-#   - name: config
-#     mountPath: /etc/adapter/config
-#   volumes:
-#   - name: config
-#     configMap:
-#       name: adapter-config
-#
-# Set ADAPTER_CONFIG_PATH environment variable to point to the mounted config:
-#   env:
-#   - name: ADAPTER_CONFIG_PATH
-#     value: /etc/adapter/adapterconfig.yaml
-
->>>>>>> 1e51a34 (fix: Moved version to a package version and fixed maestro integration running failure)
 ENTRYPOINT ["/app/adapter"]
 CMD ["serve"]
 

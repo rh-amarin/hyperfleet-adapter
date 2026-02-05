@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -101,6 +102,26 @@ func NewMaestroClient(ctx context.Context, config *Config, log logger.Logger) (*
 	if config.MaestroServerAddr == "" {
 		return nil, apperrors.ConfigurationError("maestro server address is required")
 	}
+
+	// Validate MaestroServerAddr URL scheme
+	serverURL, err := url.Parse(config.MaestroServerAddr)
+	if err != nil {
+		return nil, apperrors.ConfigurationError("invalid MaestroServerAddr URL: %v", err)
+	}
+	// Require http or https scheme (reject schemeless or other schemes like ftp://, grpc://, etc.)
+	if serverURL.Scheme != "http" && serverURL.Scheme != "https" {
+		return nil, apperrors.ConfigurationError(
+			"MaestroServerAddr must use http:// or https:// scheme (got scheme %q in %q)",
+			serverURL.Scheme, config.MaestroServerAddr)
+	}
+	// Enforce https when Insecure=false
+	if !config.Insecure && serverURL.Scheme != "https" {
+		return nil, apperrors.ConfigurationError(
+			"MaestroServerAddr must use https:// scheme when Insecure=false (got %q); "+
+				"use https:// URL or set Insecure=true for http:// connections",
+			serverURL.Scheme)
+	}
+
 	if config.GRPCServerAddr == "" {
 		return nil, apperrors.ConfigurationError("maestro gRPC server address is required")
 	}
@@ -186,51 +207,57 @@ func NewMaestroClient(ctx context.Context, config *Config, log logger.Logger) (*
 	}, nil
 }
 
-// createHTTPTransport creates an HTTP transport with appropriate TLS configuration
+// createHTTPTransport creates an HTTP transport with appropriate TLS configuration.
+// It clones http.DefaultTransport to preserve important defaults like ProxyFromEnvironment,
+// connection pooling, timeouts, etc., and only overrides TLS settings.
 func createHTTPTransport(config *Config) (*http.Transport, error) {
-	if config.Insecure {
-		// Insecure mode: skip TLS verification (works for both http:// and https://)
-		return &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: true,
-			},
-		}, nil
+	// Clone default transport to preserve ProxyFromEnvironment, DialContext,
+	// MaxIdleConns, IdleConnTimeout, TLSHandshakeTimeout, etc.
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, apperrors.ConfigurationError("http.DefaultTransport is not *http.Transport").AsError()
 	}
+	transport := defaultTransport.Clone()
 
-	// Secure mode: verify TLS certificates
+	// Build TLS config
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 	}
 
-	// Determine which CA file to use for HTTPS
-	// HTTPCAFile takes precedence, falls back to CAFile for backwards compatibility
-	httpCAFile := config.HTTPCAFile
-	if httpCAFile == "" {
-		httpCAFile = config.CAFile
+	if config.Insecure {
+		// Insecure mode: skip TLS verification (works for both http:// and https://)
+		tlsConfig.InsecureSkipVerify = true //nolint:gosec // Intentional: user explicitly set Insecure=true
+	} else {
+		// Secure mode: load CA certificate if provided
+		// HTTPCAFile takes precedence, falls back to CAFile for backwards compatibility
+		httpCAFile := config.HTTPCAFile
+		if httpCAFile == "" {
+			httpCAFile = config.CAFile
+		}
+
+		if httpCAFile != "" {
+			caCert, err := os.ReadFile(httpCAFile)
+			if err != nil {
+				return nil, err
+			}
+			caCertPool := x509.NewCertPool()
+			if !caCertPool.AppendCertsFromPEM(caCert) {
+				return nil, apperrors.ConfigurationError("failed to parse CA certificate from %s", httpCAFile).AsError()
+			}
+			tlsConfig.RootCAs = caCertPool
+		}
 	}
 
-	// Load CA certificate if provided
-	if httpCAFile != "" {
-		caCert, err := os.ReadFile(httpCAFile)
-		if err != nil {
-			return nil, err
-		}
-		caCertPool := x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM(caCert) {
-			return nil, apperrors.ConfigurationError("failed to parse CA certificate from %s", httpCAFile).AsError()
-		}
-		tlsConfig.RootCAs = caCertPool
-	}
-
-	return &http.Transport{
-		TLSClientConfig: tlsConfig,
-	}, nil
+	transport.TLSClientConfig = tlsConfig
+	return transport, nil
 }
 
 // configureTLS sets up TLS configuration for the gRPC connection
 func configureTLS(config *Config, grpcOptions *grpc.GRPCOptions) error {
-	// Insecure mode: plaintext connection (no TLS at all)
+	// Insecure mode: plaintext gRPC connection (no TLS)
+	// Note: Unlike HTTP where InsecureSkipVerify allows both http:// and https://,
+	// gRPC TLS always requires a TLS handshake on the server side.
+	// For self-signed certs with gRPC, use CAFile instead of Insecure=true.
 	if config.Insecure {
 		grpcOptions.Dialer.TLSConfig = nil
 		return nil
@@ -338,13 +365,18 @@ func configureTLS(config *Config, grpcOptions *grpc.GRPCOptions) error {
 	return fmt.Errorf("no TLS configuration provided: set CAFile (with optional ClientCertFile/ClientKeyFile or TokenFile) or set Insecure=true for plaintext connections")
 }
 
-// readTokenFile reads a token from a file and trims whitespace
+// readTokenFile reads a token from a file and trims whitespace.
+// Returns an error if the file is empty or contains only whitespace.
 func readTokenFile(path string) (string, error) {
 	token, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(token)), nil
+	trimmed := strings.TrimSpace(string(token))
+	if trimmed == "" {
+		return "", fmt.Errorf("token file %s is empty or contains only whitespace", path)
+	}
+	return trimmed, nil
 }
 
 // Close closes the gRPC connection

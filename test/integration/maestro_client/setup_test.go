@@ -3,6 +3,7 @@ package maestro_client_integration
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -209,13 +210,12 @@ exec /usr/local/bin/maestro migration \
 	}
 
 	if state.ExitCode != 0 {
-		// Get logs for debugging
+		// Get logs for debugging (read full output to avoid truncation)
 		logs, _ := container.Logs(ctx)
 		if logs != nil {
 			defer logs.Close() //nolint:errcheck
-			buf := make([]byte, 4096)
-			n, _ := logs.Read(buf)
-			println(fmt.Sprintf("      Migration logs: %s", string(buf[:n])))
+			logBytes, _ := io.ReadAll(logs)
+			println(fmt.Sprintf("      Migration logs: %s", string(logBytes)))
 		}
 		return fmt.Errorf("migration failed with exit code %d", state.ExitCode)
 	}
