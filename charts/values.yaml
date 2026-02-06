@@ -52,6 +52,10 @@ broker:
     subscriptionId: ""
     topic: ""
     deadLetterTopic: ""
+    # Auto-creation flags (default: false - infrastructure must pre-exist)
+    # Set to true for development/testing; use false in production with pre-provisioned resources
+    createTopicIfMissing: false
+    createSubscriptionIfMissing: false
   # option3: for rabbitmq
   #rabbitmq:
   # url: ""
