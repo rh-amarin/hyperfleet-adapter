@@ -97,11 +97,27 @@ func validateOperator(fl validator.FieldLevel) bool {
 }
 
 // validateParameterEnvRequired is a struct-level validator for Parameter.
-// Checks that required env params have their environment variables set.
+// Checks that required params have their source starting with "event.", "env.", or "config.".
 func validateParameterEnvRequired(sl validator.StructLevel) {
 	param := sl.Current().Interface().(Parameter) //nolint:errcheck // type is guaranteed by RegisterStructValidation
 
-	// Only validate if Required=true and Source starts with "env."
+	if !param.Required {
+		return
+	}
+
+	validPrefixes := []string{"event.", "env.", "config."}
+	hasValidPrefix := false
+	for _, prefix := range validPrefixes {
+		if strings.HasPrefix(param.Source, prefix) {
+			hasValidPrefix = true
+			break
+		}
+	}
+
+	if !hasValidPrefix {
+		sl.ReportError(param.Source, "source", "Source", "invalidsourceprefix", param.Source)
+	}
+
 	if !param.Required || !strings.HasPrefix(param.Source, "env.") {
 		return
 	}

@@ -76,8 +76,19 @@ const (
 // Resource field names
 const (
 	FieldManifest         = "manifest"
+	FieldManifests        = "manifests"
+	FieldManifestRef      = "manifestRef"
 	FieldRecreateOnChange = "recreateOnChange"
 	FieldDiscovery        = "discovery"
+	FieldTransport        = "transport"
+)
+
+// Transport field names
+const (
+	FieldClient        = "client"
+	FieldMaestro       = "maestro"
+	FieldTargetCluster = "targetCluster"
+	FieldManifestWork  = "manifestWork"
 )
 
 // Manifest reference field names

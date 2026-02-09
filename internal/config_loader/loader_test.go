@@ -18,10 +18,10 @@ func createTestConfigFiles(t *testing.T, tmpDir string, adapterYAML, taskYAML st
 	adapterPath = filepath.Join(tmpDir, "adapter-config.yaml")
 	taskPath = filepath.Join(tmpDir, "task-config.yaml")
 
-	err := os.WriteFile(adapterPath, []byte(adapterYAML), 0644)
+	err := os.WriteFile(adapterPath, []byte(adapterYAML), 0o644)
 	require.NoError(t, err)
 
-	err = os.WriteFile(taskPath, []byte(taskYAML), 0644)
+	err = os.WriteFile(taskPath, []byte(taskYAML), 0o644)
 	require.NoError(t, err)
 
 	return adapterPath, taskPath
@@ -95,7 +95,7 @@ spec:
 	assert.Equal(t, "hyperfleet.redhat.com/v1alpha1", config.APIVersion)
 	assert.Equal(t, "Config", config.Kind)
 	// Metadata comes from task config
-	assert.Equal(t, "test-adapter", config.Metadata.Name)
+	assert.Equal(t, "deployment-config", config.Metadata.Name)
 	// Adapter info comes from adapter config
 	assert.Equal(t, "0.1.0", config.Spec.Adapter.Version)
 	// Clients config comes from adapter config
@@ -119,7 +119,7 @@ kind: AdapterTaskConfig
 metadata:
   name: test-adapter
 spec: {}
-`), 0644)
+`), 0o644)
 	require.NoError(t, err)
 
 	config, err := LoadConfig(
@@ -147,7 +147,7 @@ spec:
       timeout: 5s
     kubernetes:
       apiVersion: v1
-`), 0644)
+`), 0o644)
 	require.NoError(t, err)
 
 	config, err := LoadConfig(
@@ -546,7 +546,7 @@ spec:
     - name: "testNamespace"
 `,
 			wantError: true,
-			errorMsg:  "manifest is required",
+			errorMsg:  "discovery is required", // manifest validation moved to semantic phase
 		},
 	}
 
@@ -620,7 +620,7 @@ func TestMergeConfigs(t *testing.T) {
 	assert.Equal(t, "hyperfleet.redhat.com/v1alpha1", merged.APIVersion)
 	assert.Equal(t, "Config", merged.Kind)
 	// Metadata comes from task config
-	assert.Equal(t, "task-processor", merged.Metadata.Name)
+	assert.Equal(t, "adapter-deployment", merged.Metadata.Name)
 	// Adapter info from adapter config
 	assert.Equal(t, "1.0.0", merged.Spec.Adapter.Version)
 	// Clients from adapter config
@@ -732,9 +732,9 @@ func TestValidateFileReferencesInTaskConfig(t *testing.T) {
 
 	// Create a test template file
 	templatePath := filepath.Join(tmpDir, "templates")
-	require.NoError(t, os.MkdirAll(templatePath, 0755))
+	require.NoError(t, os.MkdirAll(templatePath, 0o755))
 	templateFile := filepath.Join(templatePath, "test-template.yaml")
-	require.NoError(t, os.WriteFile(templateFile, []byte("test: value"), 0644))
+	require.NoError(t, os.WriteFile(templateFile, []byte("test: value"), 0o644))
 
 	tests := []struct {
 		name    string
@@ -892,11 +892,11 @@ func TestLoadConfigWithFileReferences(t *testing.T) {
 
 	// Create a template file
 	templateDir := filepath.Join(tmpDir, "templates")
-	require.NoError(t, os.MkdirAll(templateDir, 0755))
+	require.NoError(t, os.MkdirAll(templateDir, 0o755))
 	templateFile := filepath.Join(templateDir, "status-payload.yaml")
 	require.NoError(t, os.WriteFile(templateFile, []byte(`
 status: "{{ .status }}"
-`), 0644))
+`), 0o644))
 
 	// Create adapter config file
 	adapterYAML := `
@@ -915,7 +915,7 @@ spec:
       apiVersion: "v1"
 `
 	adapterPath := filepath.Join(tmpDir, "adapter-config.yaml")
-	require.NoError(t, os.WriteFile(adapterPath, []byte(adapterYAML), 0644))
+	require.NoError(t, os.WriteFile(adapterPath, []byte(adapterYAML), 0o644))
 
 	// Create task config file with buildRef
 	taskYAML := `
@@ -943,7 +943,7 @@ spec:
         buildRef: "templates/status-payload.yaml"
 `
 	taskPath := filepath.Join(tmpDir, "task-config.yaml")
-	require.NoError(t, os.WriteFile(taskPath, []byte(taskYAML), 0644))
+	require.NoError(t, os.WriteFile(taskPath, []byte(taskYAML), 0o644))
 
 	// Load should succeed because template file exists
 	config, err := LoadConfig(
@@ -986,7 +986,7 @@ spec:
         buildRef: "templates/nonexistent.yaml"
 `
 	taskPathBad := filepath.Join(tmpDir, "task-config-bad.yaml")
-	require.NoError(t, os.WriteFile(taskPathBad, []byte(taskYAMLBad), 0644))
+	require.NoError(t, os.WriteFile(taskPathBad, []byte(taskYAMLBad), 0o644))
 
 	// Load should fail because template file doesn't exist
 	config, err = LoadConfig(
@@ -1003,14 +1003,14 @@ func TestLoadFileReferencesContent(t *testing.T) {
 	// Create temporary directory
 	tmpDir := t.TempDir()
 	templateDir := filepath.Join(tmpDir, "templates")
-	require.NoError(t, os.MkdirAll(templateDir, 0755))
+	require.NoError(t, os.MkdirAll(templateDir, 0o755))
 
 	// Create a buildRef template file
 	buildRefFile := filepath.Join(templateDir, "status-payload.yaml")
 	require.NoError(t, os.WriteFile(buildRefFile, []byte(`
 status: "{{ .status }}"
 message: "Operation completed"
-`), 0644))
+`), 0o644))
 
 	// Create a manifest.ref template file
 	manifestRefFile := filepath.Join(templateDir, "deployment.yaml")
@@ -1022,7 +1022,7 @@ metadata:
   namespace: "{{ .namespace }}"
 spec:
   replicas: 1
-`), 0644))
+`), 0o644))
 
 	// Create adapter config
 	adapterYAML := `
@@ -1041,7 +1041,7 @@ spec:
       apiVersion: "v1"
 `
 	adapterPath := filepath.Join(tmpDir, "adapter-config.yaml")
-	require.NoError(t, os.WriteFile(adapterPath, []byte(adapterYAML), 0644))
+	require.NoError(t, os.WriteFile(adapterPath, []byte(adapterYAML), 0o644))
 
 	// Create task config file with both buildRef and manifest.ref
 	taskYAML := `
@@ -1068,7 +1068,7 @@ spec:
         buildRef: "templates/status-payload.yaml"
 `
 	taskPath := filepath.Join(tmpDir, "task-config.yaml")
-	require.NoError(t, os.WriteFile(taskPath, []byte(taskYAML), 0644))
+	require.NoError(t, os.WriteFile(taskPath, []byte(taskYAML), 0o644))
 
 	// Load config
 	config, err := LoadConfig(

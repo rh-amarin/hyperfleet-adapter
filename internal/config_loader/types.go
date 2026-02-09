@@ -48,7 +48,7 @@ func (c *Config) GetMetadata() Metadata {
 }
 
 // Merge combines AdapterConfig (deployment) and AdapterTaskConfig (task) into a unified Config.
-// The metadata is taken from the task config since it contains the adapter task name.
+// The metadata is taken from the config since it contains the adapter name.
 // The adapter info and clients come from the deployment config.
 // The params, preconditions, resources, and post-processing come from the task config.
 func Merge(adapterCfg *AdapterConfig, taskCfg *AdapterTaskConfig) *Config {
@@ -59,7 +59,7 @@ func Merge(adapterCfg *AdapterConfig, taskCfg *AdapterTaskConfig) *Config {
 	return &Config{
 		APIVersion: adapterCfg.APIVersion,
 		Kind:       ExpectedKindConfig,
-		Metadata:   taskCfg.Metadata, // Use task metadata for adapter name
+		Metadata:   adapterCfg.Metadata, // Use config metadata for adapter name
 		Spec: ConfigSpec{
 			// From deployment config
 			Adapter:     adapterCfg.Spec.Adapter,
@@ -293,12 +293,61 @@ func (c *Condition) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
+// NamedManifest represents a manifest with an identifying name within a Maestro resource.
+// Used for bundling multiple manifests into a single ManifestWork.
+type NamedManifest struct {
+	Name        string      `yaml:"name" validate:"required,resourcename"`
+	Manifest    interface{} `yaml:"manifest,omitempty"`
+	ManifestRef string      `yaml:"manifestRef,omitempty"`
+	// ManifestRefContent is populated by loader from ManifestRef file
+	ManifestRefContent map[string]interface{} `yaml:"-"`
+}
+
 // Resource represents a Kubernetes resource configuration
 type Resource struct {
 	Name             string           `yaml:"name" validate:"required,resourcename"`
-	Manifest         interface{}      `yaml:"manifest,omitempty" validate:"required"`
+	Transport        *TransportConfig `yaml:"transport,omitempty"`
+	Manifest         interface{}      `yaml:"manifest,omitempty"`         // For Kubernetes transport
+	Manifests        []NamedManifest  `yaml:"manifests,omitempty"`        // For Maestro transport (multiple manifests bundled in one ManifestWork)
 	RecreateOnChange bool             `yaml:"recreateOnChange,omitempty"`
 	Discovery        *DiscoveryConfig `yaml:"discovery,omitempty" validate:"required"`
+}
+
+// TransportClientType represents the transport client type
+type TransportClientType string
+
+const (
+	// TransportClientKubernetes indicates direct Kubernetes API transport
+	TransportClientKubernetes TransportClientType = "kubernetes"
+	// TransportClientMaestro indicates Maestro ManifestWork transport
+	TransportClientMaestro TransportClientType = "maestro"
+)
+
+// TransportConfig defines transport configuration for a resource
+type TransportConfig struct {
+	Client  TransportClientType     `yaml:"client,omitempty" validate:"omitempty,oneof=kubernetes maestro"`
+	Maestro *MaestroTransportConfig `yaml:"maestro,omitempty"`
+}
+
+// GetClientType returns the transport client type, defaulting to "kubernetes"
+func (t *TransportConfig) GetClientType() TransportClientType {
+	if t == nil || t.Client == "" {
+		return TransportClientKubernetes
+	}
+	return t.Client
+}
+
+// MaestroTransportConfig contains Maestro-specific transport settings
+type MaestroTransportConfig struct {
+	TargetCluster string              `yaml:"targetCluster" validate:"required"`
+	ManifestWork  *ManifestWorkConfig `yaml:"manifestWork,omitempty"`
+}
+
+// ManifestWorkConfig contains ManifestWork-specific settings
+type ManifestWorkConfig struct {
+	Ref        string                 `yaml:"ref,omitempty"`
+	RefContent map[string]interface{} `yaml:"-"`
+	Name       string                 `yaml:"name,omitempty"`
 }
 
 // DiscoveryConfig represents resource discovery configuration

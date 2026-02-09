@@ -11,6 +11,7 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/config_loader"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/maestro_client"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	pkgotel "github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/otel"
 	"go.opentelemetry.io/otel"
@@ -337,6 +338,12 @@ func (b *ExecutorBuilder) WithAPIClient(client hyperfleet_api.Client) *ExecutorB
 // WithK8sClient sets the Kubernetes client
 func (b *ExecutorBuilder) WithK8sClient(client k8s_client.K8sClient) *ExecutorBuilder {
 	b.config.K8sClient = client
+	return b
+}
+
+// WithMaestroClient sets the Maestro ManifestWork client
+func (b *ExecutorBuilder) WithMaestroClient(client maestro_client.ManifestWorkClient) *ExecutorBuilder {
+	b.config.MaestroClient = client
 	return b
 }
 

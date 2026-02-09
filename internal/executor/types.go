@@ -10,6 +10,7 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/generation"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/maestro_client"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -62,6 +63,8 @@ type ExecutorConfig struct {
 	APIClient hyperfleet_api.Client
 	// K8sClient is the Kubernetes client
 	K8sClient k8s_client.K8sClient
+	// MaestroClient is the Maestro ManifestWork client (optional, required if any resource uses maestro transport)
+	MaestroClient maestro_client.ManifestWorkClient
 	// Logger is the logger instance
 	Logger logger.Logger
 }

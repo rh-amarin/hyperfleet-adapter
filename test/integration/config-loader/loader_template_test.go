@@ -59,7 +59,7 @@ func TestLoadSplitConfig(t *testing.T) {
 	assert.Equal(t, "Config", config.Kind)
 
 	// Metadata comes from task config
-	assert.Equal(t, "example-adapter", config.Metadata.Name)
+	assert.Equal(t, "test-adapter", config.Metadata.Name)
 
 	// Adapter info comes from adapter config
 	assert.Equal(t, "0.1.0", config.Spec.Adapter.Version)

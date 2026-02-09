@@ -9,10 +9,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/client_factory"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/config_loader"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/executor"
-	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleet_api"
-	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8s_client"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/maestro_client"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/health"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/otel"
@@ -50,7 +50,6 @@ const (
 )
 
 func main() {
-
 	// Root command
 	rootCmd := &cobra.Command{
 		Use:   "adapter",
@@ -269,7 +268,7 @@ func runServe() error {
 
 	// Create HyperFleet API client from config
 	log.Info(ctx, "Creating HyperFleet API client...")
-	apiClient, err := createAPIClient(config.Spec.Clients.HyperfleetAPI, log)
+	apiClient, err := client_factory.CreateAPIClient(config.Spec.Clients.HyperfleetAPI, log)
 	if err != nil {
 		errCtx := logger.WithErrorField(ctx, err)
 		log.Errorf(errCtx, "Failed to create HyperFleet API client")
@@ -278,21 +277,39 @@ func runServe() error {
 
 	// Create Kubernetes client
 	log.Info(ctx, "Creating Kubernetes client...")
-	k8sClient, err := createK8sClient(ctx, config.Spec.Clients.Kubernetes, log)
+	k8sClient, err := client_factory.CreateK8sClient(ctx, config.Spec.Clients.Kubernetes, log)
 	if err != nil {
 		errCtx := logger.WithErrorField(ctx, err)
 		log.Errorf(errCtx, "Failed to create Kubernetes client")
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
+	// Create Maestro client if configured
+	var maestroClient maestro_client.ManifestWorkClient
+	if config.Spec.Clients.Maestro != nil {
+		log.Info(ctx, "Creating Maestro client...")
+		maestroClient, err = client_factory.CreateMaestroClient(ctx, config.Spec.Clients.Maestro, log)
+		if err != nil {
+			errCtx := logger.WithErrorField(ctx, err)
+			log.Errorf(errCtx, "Failed to create Maestro client")
+			return fmt.Errorf("failed to create Maestro client: %w", err)
+		}
+		log.Info(ctx, "Maestro client created successfully")
+	}
+
 	// Create the executor using the builder pattern
 	log.Info(ctx, "Creating event executor...")
-	exec, err := executor.NewBuilder().
+	execBuilder := executor.NewBuilder().
 		WithConfig(config).
 		WithAPIClient(apiClient).
 		WithK8sClient(k8sClient).
-		WithLogger(log).
-		Build()
+		WithLogger(log)
+
+	if maestroClient != nil {
+		execBuilder = execBuilder.WithMaestroClient(maestroClient)
+	}
+
+	exec, err := execBuilder.Build()
 	if err != nil {
 		errCtx := logger.WithErrorField(ctx, err)
 		log.Errorf(errCtx, "Failed to create executor")
@@ -436,61 +453,4 @@ func runServe() error {
 	log.Info(ctx, "Adapter shutdown complete")
 
 	return nil
-}
-
-// createAPIClient creates a HyperFleet API client from the config
-func createAPIClient(apiConfig config_loader.HyperfleetAPIConfig, log logger.Logger) (hyperfleet_api.Client, error) {
-	var opts []hyperfleet_api.ClientOption
-
-	// Set base URL if configured (env fallback handled in NewClient)
-	if apiConfig.BaseURL != "" {
-		opts = append(opts, hyperfleet_api.WithBaseURL(apiConfig.BaseURL))
-	}
-
-	// Set timeout if configured (0 means use default)
-	if apiConfig.Timeout > 0 {
-		opts = append(opts, hyperfleet_api.WithTimeout(apiConfig.Timeout))
-	}
-
-	// Set retry attempts
-	if apiConfig.RetryAttempts > 0 {
-		opts = append(opts, hyperfleet_api.WithRetryAttempts(apiConfig.RetryAttempts))
-	}
-
-	// Set retry backoff strategy
-	if apiConfig.RetryBackoff != "" {
-		switch apiConfig.RetryBackoff {
-		case hyperfleet_api.BackoffExponential, hyperfleet_api.BackoffLinear, hyperfleet_api.BackoffConstant:
-			opts = append(opts, hyperfleet_api.WithRetryBackoff(apiConfig.RetryBackoff))
-		default:
-			return nil, fmt.Errorf("invalid retry backoff strategy %q (supported: exponential, linear, constant)", apiConfig.RetryBackoff)
-		}
-	}
-
-	// Set retry base delay
-	if apiConfig.BaseDelay > 0 {
-		opts = append(opts, hyperfleet_api.WithBaseDelay(apiConfig.BaseDelay))
-	}
-
-	// Set retry max delay
-	if apiConfig.MaxDelay > 0 {
-		opts = append(opts, hyperfleet_api.WithMaxDelay(apiConfig.MaxDelay))
-	}
-
-	// Set default headers
-	for key, value := range apiConfig.DefaultHeaders {
-		opts = append(opts, hyperfleet_api.WithDefaultHeader(key, value))
-	}
-
-	return hyperfleet_api.NewClient(log, opts...)
-}
-
-// createK8sClient creates a Kubernetes client from the config
-func createK8sClient(ctx context.Context, k8sConfig config_loader.KubernetesConfig, log logger.Logger) (*k8s_client.Client, error) {
-	clientConfig := k8s_client.ClientConfig{
-		KubeConfigPath: k8sConfig.KubeConfigPath,
-		QPS:            k8sConfig.QPS,
-		Burst:          k8sConfig.Burst,
-	}
-	return k8s_client.NewClient(ctx, clientConfig, log)
 }

@@ -168,6 +168,29 @@ func (c *Config) ResourceNames() []string {
 }
 
 // -----------------------------------------------------------------------------
+// NamedManifest Accessors
+// -----------------------------------------------------------------------------
+
+// GetManifestContent returns manifest content, preferring loaded ref content
+func (nm *NamedManifest) GetManifestContent() interface{} {
+	if nm == nil {
+		return nil
+	}
+	if nm.ManifestRefContent != nil {
+		return nm.ManifestRefContent
+	}
+	return nm.Manifest
+}
+
+// HasManifestRef returns true if using file reference
+func (nm *NamedManifest) HasManifestRef() bool {
+	if nm == nil {
+		return false
+	}
+	return nm.ManifestRef != ""
+}
+
+// -----------------------------------------------------------------------------
 // Resource Accessors
 // -----------------------------------------------------------------------------
 

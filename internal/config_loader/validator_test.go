@@ -559,3 +559,351 @@ func TestFieldNameCachePopulated(t *testing.T) {
 		})
 	}
 }
+
+func TestTransportConfigGetClientType(t *testing.T) {
+	t.Run("nil transport returns kubernetes", func(t *testing.T) {
+		var tc *TransportConfig
+		assert.Equal(t, TransportClientKubernetes, tc.GetClientType())
+	})
+
+	t.Run("empty client returns kubernetes", func(t *testing.T) {
+		tc := &TransportConfig{}
+		assert.Equal(t, TransportClientKubernetes, tc.GetClientType())
+	})
+
+	t.Run("kubernetes client returns kubernetes", func(t *testing.T) {
+		tc := &TransportConfig{Client: TransportClientKubernetes}
+		assert.Equal(t, TransportClientKubernetes, tc.GetClientType())
+	})
+
+	t.Run("maestro client returns maestro", func(t *testing.T) {
+		tc := &TransportConfig{Client: TransportClientMaestro}
+		assert.Equal(t, TransportClientMaestro, tc.GetClientType())
+	})
+}
+
+func TestValidateTransportConfig(t *testing.T) {
+	validManifest := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]interface{}{
+			"name":      "test-cm",
+			"namespace": "default",
+		},
+	}
+
+	// Helper to create resource with transport config for Kubernetes transport
+	withK8sTransport := func(transport *TransportConfig) *AdapterTaskConfig {
+		cfg := baseTaskConfig()
+		cfg.Spec.Params = []Parameter{
+			{Name: "targetCluster", Source: "event.targetCluster"},
+		}
+		cfg.Spec.Resources = []Resource{{
+			Name:      "testResource",
+			Transport: transport,
+			Manifest:  validManifest,
+			Discovery: &DiscoveryConfig{
+				Namespace: "default",
+				ByName:    "test-cm",
+			},
+		}}
+		return cfg
+	}
+
+	// Helper to create resource with transport config for Maestro transport
+	withMaestroTransport := func(transport *TransportConfig) *AdapterTaskConfig {
+		cfg := baseTaskConfig()
+		cfg.Spec.Params = []Parameter{
+			{Name: "targetCluster", Source: "event.targetCluster"},
+		}
+		cfg.Spec.Resources = []Resource{{
+			Name:      "testResource",
+			Transport: transport,
+			Manifests: []NamedManifest{
+				{Name: "configmap", Manifest: validManifest},
+			},
+			Discovery: &DiscoveryConfig{
+				Namespace: "default",
+				ByName:    "test-cm",
+			},
+		}}
+		return cfg
+	}
+
+	t.Run("valid kubernetes transport", func(t *testing.T) {
+		cfg := withK8sTransport(&TransportConfig{Client: TransportClientKubernetes})
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		require.NoError(t, v.ValidateSemantic())
+	})
+
+	t.Run("valid nil transport defaults to kubernetes", func(t *testing.T) {
+		cfg := withK8sTransport(nil)
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		require.NoError(t, v.ValidateSemantic())
+	})
+
+	t.Run("valid maestro transport", func(t *testing.T) {
+		cfg := withMaestroTransport(&TransportConfig{
+			Client: TransportClientMaestro,
+			Maestro: &MaestroTransportConfig{
+				TargetCluster: "{{ .targetCluster }}",
+			},
+		})
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		require.NoError(t, v.ValidateSemantic())
+	})
+
+	t.Run("valid maestro transport with manifestWork name", func(t *testing.T) {
+		cfg := withMaestroTransport(&TransportConfig{
+			Client: TransportClientMaestro,
+			Maestro: &MaestroTransportConfig{
+				TargetCluster: "{{ .targetCluster }}",
+				ManifestWork: &ManifestWorkConfig{
+					Name: "work-{{ .targetCluster }}",
+				},
+			},
+		})
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		require.NoError(t, v.ValidateSemantic())
+	})
+
+	t.Run("invalid maestro transport missing maestro config", func(t *testing.T) {
+		cfg := withMaestroTransport(&TransportConfig{
+			Client: TransportClientMaestro,
+		})
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		// Semantic validation catches missing maestro config
+		err := v.ValidateSemantic()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "maestro configuration is required")
+	})
+
+	t.Run("invalid maestro transport missing targetCluster", func(t *testing.T) {
+		cfg := withMaestroTransport(&TransportConfig{
+			Client:  TransportClientMaestro,
+			Maestro: &MaestroTransportConfig{},
+		})
+		v := newTaskValidator(cfg)
+		// Struct validation catches this via required tag on TargetCluster
+		err := v.ValidateStructure()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "targetCluster")
+	})
+
+	t.Run("invalid maestro transport undefined template variable", func(t *testing.T) {
+		cfg := withMaestroTransport(&TransportConfig{
+			Client: TransportClientMaestro,
+			Maestro: &MaestroTransportConfig{
+				TargetCluster: "{{ .undefinedVar }}",
+			},
+		})
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		err := v.ValidateSemantic()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "undefined template variable")
+	})
+}
+
+func TestValidateManifestFields(t *testing.T) {
+	validManifest := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Namespace",
+		"metadata":   map[string]interface{}{"name": "test-namespace"},
+	}
+
+	t.Run("kubernetes transport requires manifest field", func(t *testing.T) {
+		cfg := baseTaskConfig()
+		cfg.Spec.Params = []Parameter{
+			{Name: "targetCluster", Source: "event.targetCluster"},
+		}
+		cfg.Spec.Resources = []Resource{{
+			Name:      "testResource",
+			Transport: &TransportConfig{Client: TransportClientKubernetes},
+			// Missing Manifest field
+			Discovery: &DiscoveryConfig{Namespace: "*", ByName: "test"},
+		}}
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		err := v.ValidateSemantic()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "kubernetes transport requires 'manifest' field")
+	})
+
+	t.Run("kubernetes transport does not support manifests array", func(t *testing.T) {
+		cfg := baseTaskConfig()
+		cfg.Spec.Resources = []Resource{{
+			Name:      "testResource",
+			Transport: &TransportConfig{Client: TransportClientKubernetes},
+			Manifest:  validManifest,
+			Manifests: []NamedManifest{
+				{Name: "ns", Manifest: validManifest},
+			},
+			Discovery: &DiscoveryConfig{Namespace: "*", ByName: "test"},
+		}}
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		err := v.ValidateSemantic()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "kubernetes transport does not support 'manifests' array")
+	})
+
+	t.Run("maestro transport requires manifests array", func(t *testing.T) {
+		cfg := baseTaskConfig()
+		cfg.Spec.Params = []Parameter{
+			{Name: "targetCluster", Source: "event.targetCluster"},
+		}
+		cfg.Spec.Resources = []Resource{{
+			Name: "testResource",
+			Transport: &TransportConfig{
+				Client:  TransportClientMaestro,
+				Maestro: &MaestroTransportConfig{TargetCluster: "{{ .targetCluster }}"},
+			},
+			// Missing Manifests array
+			Discovery: &DiscoveryConfig{Namespace: "*", ByName: "test"},
+		}}
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		err := v.ValidateSemantic()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "maestro transport requires 'manifests' array")
+	})
+
+	t.Run("maestro transport does not support manifest field", func(t *testing.T) {
+		cfg := baseTaskConfig()
+		cfg.Spec.Params = []Parameter{
+			{Name: "targetCluster", Source: "event.targetCluster"},
+		}
+		cfg.Spec.Resources = []Resource{{
+			Name: "testResource",
+			Transport: &TransportConfig{
+				Client:  TransportClientMaestro,
+				Maestro: &MaestroTransportConfig{TargetCluster: "{{ .targetCluster }}"},
+			},
+			Manifest: validManifest, // Should not be used with maestro
+			Manifests: []NamedManifest{
+				{Name: "ns", Manifest: validManifest},
+			},
+			Discovery: &DiscoveryConfig{Namespace: "*", ByName: "test"},
+		}}
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		err := v.ValidateSemantic()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "maestro transport uses 'manifests' array, not 'manifest'")
+	})
+
+	t.Run("valid maestro transport with manifests array", func(t *testing.T) {
+		cfg := baseTaskConfig()
+		cfg.Spec.Params = []Parameter{
+			{Name: "targetCluster", Source: "event.targetCluster"},
+		}
+		cfg.Spec.Resources = []Resource{{
+			Name: "testResource",
+			Transport: &TransportConfig{
+				Client:  TransportClientMaestro,
+				Maestro: &MaestroTransportConfig{TargetCluster: "{{ .targetCluster }}"},
+			},
+			Manifests: []NamedManifest{
+				{Name: "namespace", Manifest: validManifest},
+				{Name: "configmap", Manifest: map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]interface{}{"name": "test-cm", "namespace": "default"},
+				}},
+			},
+			Discovery: &DiscoveryConfig{Namespace: "*", ByName: "test"},
+		}}
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		require.NoError(t, v.ValidateSemantic())
+	})
+
+	t.Run("named manifest requires manifest or manifestRef", func(t *testing.T) {
+		cfg := baseTaskConfig()
+		cfg.Spec.Params = []Parameter{
+			{Name: "targetCluster", Source: "event.targetCluster"},
+		}
+		cfg.Spec.Resources = []Resource{{
+			Name: "testResource",
+			Transport: &TransportConfig{
+				Client:  TransportClientMaestro,
+				Maestro: &MaestroTransportConfig{TargetCluster: "{{ .targetCluster }}"},
+			},
+			Manifests: []NamedManifest{
+				{Name: "empty"}, // Missing both manifest and manifestRef
+			},
+			Discovery: &DiscoveryConfig{Namespace: "*", ByName: "test"},
+		}}
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		err := v.ValidateSemantic()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "named manifest requires either 'manifest' or 'manifestRef'")
+	})
+
+	t.Run("named manifest cannot have both manifest and manifestRef", func(t *testing.T) {
+		cfg := baseTaskConfig()
+		cfg.Spec.Params = []Parameter{
+			{Name: "targetCluster", Source: "event.targetCluster"},
+		}
+		cfg.Spec.Resources = []Resource{{
+			Name: "testResource",
+			Transport: &TransportConfig{
+				Client:  TransportClientMaestro,
+				Maestro: &MaestroTransportConfig{TargetCluster: "{{ .targetCluster }}"},
+			},
+			Manifests: []NamedManifest{
+				{Name: "conflicting", Manifest: validManifest, ManifestRef: "templates/manifest.yaml"},
+			},
+			Discovery: &DiscoveryConfig{Namespace: "*", ByName: "test"},
+		}}
+		v := newTaskValidator(cfg)
+		require.NoError(t, v.ValidateStructure())
+		err := v.ValidateSemantic()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "'manifest' and 'manifestRef' are mutually exclusive")
+	})
+}
+
+func TestNamedManifestAccessors(t *testing.T) {
+	t.Run("GetManifestContent returns manifest when set", func(t *testing.T) {
+		manifest := map[string]interface{}{"apiVersion": "v1", "kind": "Namespace"}
+		nm := &NamedManifest{Name: "test", Manifest: manifest}
+		content := nm.GetManifestContent()
+		assert.Equal(t, manifest, content)
+	})
+
+	t.Run("GetManifestContent returns refContent when set", func(t *testing.T) {
+		manifest := map[string]interface{}{"apiVersion": "v1", "kind": "Namespace"}
+		refContent := map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap"}
+		nm := &NamedManifest{Name: "test", Manifest: manifest, ManifestRefContent: refContent}
+		content := nm.GetManifestContent()
+		assert.Equal(t, refContent, content, "should prefer refContent over manifest")
+	})
+
+	t.Run("GetManifestContent returns nil for nil receiver", func(t *testing.T) {
+		var nm *NamedManifest
+		assert.Nil(t, nm.GetManifestContent())
+	})
+
+	t.Run("HasManifestRef returns true when manifestRef is set", func(t *testing.T) {
+		nm := &NamedManifest{Name: "test", ManifestRef: "templates/manifest.yaml"}
+		assert.True(t, nm.HasManifestRef())
+	})
+
+	t.Run("HasManifestRef returns false when manifestRef is empty", func(t *testing.T) {
+		nm := &NamedManifest{Name: "test", Manifest: map[string]interface{}{}}
+		assert.False(t, nm.HasManifestRef())
+	})
+
+	t.Run("HasManifestRef returns false for nil receiver", func(t *testing.T) {
+		var nm *NamedManifest
+		assert.False(t, nm.HasManifestRef())
+	})
+}

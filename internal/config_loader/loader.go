@@ -198,17 +198,39 @@ func loadTaskConfigFileReferences(config *AdapterTaskConfig, baseDir string) err
 	for i := range config.Spec.Resources {
 		resource := &config.Spec.Resources[i]
 		ref := resource.GetManifestRef()
-		if ref == "" {
-			continue
+		if ref != "" {
+			content, err := loadYAMLFile(baseDir, ref)
+			if err != nil {
+				return fmt.Errorf("%s.%s[%d].%s.%s: %w", FieldSpec, FieldResources, i, FieldManifest, FieldRef, err)
+			}
+
+			// Replace manifest with loaded content
+			resource.Manifest = content
 		}
 
-		content, err := loadYAMLFile(baseDir, ref)
-		if err != nil {
-			return fmt.Errorf("%s.%s[%d].%s.%s: %w", FieldSpec, FieldResources, i, FieldManifest, FieldRef, err)
+		// Load manifestRef in manifests array (Maestro transport)
+		for j := range resource.Manifests {
+			namedManifest := &resource.Manifests[j]
+			if namedManifest.ManifestRef != "" {
+				content, err := loadYAMLFile(baseDir, namedManifest.ManifestRef)
+				if err != nil {
+					return fmt.Errorf("%s.%s[%d].%s[%d].%s: %w",
+						FieldSpec, FieldResources, i, FieldManifests, j, FieldManifestRef, err)
+				}
+				namedManifest.ManifestRefContent = content
+			}
 		}
 
-		// Replace manifest with loaded content
-		resource.Manifest = content
+		// Load transport.maestro.manifestWork.ref
+		if resource.Transport != nil && resource.Transport.Maestro != nil && resource.Transport.Maestro.ManifestWork != nil {
+			if resource.Transport.Maestro.ManifestWork.Ref != "" {
+				content, err := loadYAMLFile(baseDir, resource.Transport.Maestro.ManifestWork.Ref)
+				if err != nil {
+					return fmt.Errorf("%s.%s[%d].%s.%s.%s.%s: %w", FieldSpec, FieldResources, i, FieldTransport, FieldMaestro, FieldManifestWork, FieldRef, err)
+				}
+				resource.Transport.Maestro.ManifestWork.RefContent = content
+			}
+		}
 	}
 
 	// Load buildRef in spec.post.payloads
@@ -248,21 +270,24 @@ func loadYAMLFile(baseDir, refPath string) (map[string]interface{}, error) {
 	return content, nil
 }
 
-// resolvePath resolves a relative path against the base directory and validates
-// that the resolved path does not escape the base directory.
+// resolvePath resolves a path against the base directory.
+// - Absolute paths are returned as-is (allows mounting files from /etc/adapter, etc.)
+// - Relative paths are resolved against the base directory and validated to not escape it
 func resolvePath(baseDir, refPath string) (string, error) {
+	// Absolute paths are allowed without restriction
+	// This supports Kubernetes deployments where files are mounted to fixed paths
+	if filepath.IsAbs(refPath) {
+		return filepath.Clean(refPath), nil
+	}
+
+	// Relative paths must be resolved against base directory
 	baseAbs, err := filepath.Abs(baseDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve base directory: %w", err)
 	}
 	baseClean := filepath.Clean(baseAbs)
 
-	var targetPath string
-	if filepath.IsAbs(refPath) {
-		targetPath = filepath.Clean(refPath)
-	} else {
-		targetPath = filepath.Clean(filepath.Join(baseClean, refPath))
-	}
+	targetPath := filepath.Clean(filepath.Join(baseClean, refPath))
 
 	// Check if target path is within base directory
 	rel, err := filepath.Rel(baseClean, targetPath)

@@ -122,6 +122,26 @@ func (v *TaskConfigValidator) ValidateFileReferences() error {
 				errors = append(errors, err.Error())
 			}
 		}
+
+		// Validate manifestRef in manifests array (Maestro transport)
+		for j, nm := range resource.Manifests {
+			if nm.ManifestRef != "" {
+				path := fmt.Sprintf("%s.%s[%d].%s[%d].%s", FieldSpec, FieldResources, i, FieldManifests, j, FieldManifestRef)
+				if err := v.validateFileExists(nm.ManifestRef, path); err != nil {
+					errors = append(errors, err.Error())
+				}
+			}
+		}
+
+		// Validate transport.maestro.manifestWork.ref in spec.resources
+		if resource.Transport != nil && resource.Transport.Maestro != nil && resource.Transport.Maestro.ManifestWork != nil {
+			if resource.Transport.Maestro.ManifestWork.Ref != "" {
+				path := fmt.Sprintf("%s.%s[%d].%s.%s.%s.%s", FieldSpec, FieldResources, i, FieldTransport, FieldMaestro, FieldManifestWork, FieldRef)
+				if err := v.validateFileExists(resource.Transport.Maestro.ManifestWork.Ref, path); err != nil {
+					errors = append(errors, err.Error())
+				}
+			}
+		}
 	}
 
 	if len(errors) > 0 {
@@ -172,7 +192,9 @@ func (v *TaskConfigValidator) ValidateSemantic() error {
 	v.validateCaptureFieldExpressions()
 	v.validateTemplateVariables()
 	v.validateCELExpressions()
+	v.validateManifestFields()
 	v.validateK8sManifests()
+	v.validateTransportConfig()
 
 	if v.errors.HasErrors() {
 		return v.errors
@@ -327,9 +349,21 @@ func (v *TaskConfigValidator) validateTemplateVariables() {
 	// Validate resource manifests
 	for i, resource := range v.config.Spec.Resources {
 		resourcePath := fmt.Sprintf("%s.%s[%d]", FieldSpec, FieldResources, i)
+
+		// Validate single manifest (Kubernetes transport)
 		if manifest, ok := resource.Manifest.(map[string]interface{}); ok {
 			v.validateTemplateMap(manifest, resourcePath+"."+FieldManifest)
 		}
+
+		// Validate manifests array (Maestro transport)
+		for j, nm := range resource.Manifests {
+			content := nm.GetManifestContent()
+			if manifest, ok := content.(map[string]interface{}); ok {
+				manifestPath := fmt.Sprintf("%s.%s[%d].%s", resourcePath, FieldManifests, j, FieldManifest)
+				v.validateTemplateMap(manifest, manifestPath)
+			}
+		}
+
 		if resource.Discovery != nil {
 			discoveryPath := resourcePath + "." + FieldDiscovery
 			v.validateTemplateString(resource.Discovery.Namespace, discoveryPath+"."+FieldNamespace)
@@ -486,17 +520,68 @@ func (v *TaskConfigValidator) validateBuildExpressions(m map[string]interface{},
 	}
 }
 
+// validateManifestFields validates that manifest/manifests fields are used correctly per transport type
+func (v *TaskConfigValidator) validateManifestFields() {
+	for i, resource := range v.config.Spec.Resources {
+		path := fmt.Sprintf("%s.%s[%d]", FieldSpec, FieldResources, i)
+		clientType := resource.Transport.GetClientType()
+
+		switch clientType {
+		case TransportClientKubernetes:
+			if resource.Manifest == nil {
+				v.errors.Add(path, "kubernetes transport requires 'manifest' field")
+			}
+			if len(resource.Manifests) > 0 {
+				v.errors.Add(path, "kubernetes transport does not support 'manifests' array")
+			}
+		case TransportClientMaestro:
+			if len(resource.Manifests) == 0 {
+				v.errors.Add(path, "maestro transport requires 'manifests' array")
+			}
+			if resource.Manifest != nil {
+				v.errors.Add(path, "maestro transport uses 'manifests' array, not 'manifest'")
+			}
+			// Validate each named manifest has either manifest or manifestRef
+			for j, nm := range resource.Manifests {
+				nmPath := fmt.Sprintf("%s.%s[%d]", path, FieldManifests, j)
+				if nm.Manifest == nil && nm.ManifestRef == "" {
+					v.errors.Add(nmPath, "named manifest requires either 'manifest' or 'manifestRef'")
+				}
+				if nm.Manifest != nil && nm.ManifestRef != "" {
+					v.errors.Add(nmPath, "'manifest' and 'manifestRef' are mutually exclusive")
+				}
+			}
+		}
+	}
+}
+
 func (v *TaskConfigValidator) validateK8sManifests() {
 	for i, resource := range v.config.Spec.Resources {
-		path := fmt.Sprintf("%s.%s[%d].%s", FieldSpec, FieldResources, i, FieldManifest)
+		clientType := resource.Transport.GetClientType()
 
-		if manifest, ok := resource.Manifest.(map[string]interface{}); ok {
-			if ref, hasRef := manifest[FieldRef].(string); hasRef {
-				if ref == "" {
-					v.errors.Add(path+"."+FieldRef, "manifest ref cannot be empty")
+		// For Kubernetes transport, validate the single manifest field
+		if clientType == TransportClientKubernetes {
+			path := fmt.Sprintf("%s.%s[%d].%s", FieldSpec, FieldResources, i, FieldManifest)
+
+			if manifest, ok := resource.Manifest.(map[string]interface{}); ok {
+				if ref, hasRef := manifest[FieldRef].(string); hasRef {
+					if ref == "" {
+						v.errors.Add(path+"."+FieldRef, "manifest ref cannot be empty")
+					}
+				} else {
+					v.validateK8sManifest(manifest, path)
 				}
-			} else {
-				v.validateK8sManifest(manifest, path)
+			}
+		}
+
+		// For Maestro transport, validate each manifest in the manifests array
+		if clientType == TransportClientMaestro {
+			for j, nm := range resource.Manifests {
+				path := fmt.Sprintf("%s.%s[%d].%s[%d].%s", FieldSpec, FieldResources, i, FieldManifests, j, FieldManifest)
+				content := nm.GetManifestContent()
+				if manifest, ok := content.(map[string]interface{}); ok {
+					v.validateK8sManifest(manifest, path)
+				}
 			}
 		}
 	}
@@ -526,6 +611,39 @@ func (v *TaskConfigValidator) validateK8sManifest(manifest map[string]interface{
 	if kind, ok := manifest[FieldKind].(string); ok {
 		if kind == "" {
 			v.errors.Add(path+"."+FieldKind, "kind cannot be empty")
+		}
+	}
+}
+
+// validateTransportConfig validates transport configuration for all resources
+func (v *TaskConfigValidator) validateTransportConfig() {
+	for i, resource := range v.config.Spec.Resources {
+		if resource.Transport == nil {
+			continue
+		}
+
+		basePath := fmt.Sprintf("%s.%s[%d].%s", FieldSpec, FieldResources, i, FieldTransport)
+
+		// Validate maestro config is present when client=maestro
+		if resource.Transport.Client == TransportClientMaestro {
+			if resource.Transport.Maestro == nil {
+				v.errors.Add(basePath, "maestro configuration is required when client is 'maestro'")
+				continue
+			}
+
+			// Validate targetCluster is present and validate its template variables
+			maestroPath := basePath + "." + FieldMaestro
+			if resource.Transport.Maestro.TargetCluster == "" {
+				v.errors.Add(maestroPath, "targetCluster is required")
+			} else {
+				// Validate template variables in targetCluster
+				v.validateTemplateString(resource.Transport.Maestro.TargetCluster, maestroPath+"."+FieldTargetCluster)
+			}
+
+			// Validate manifestWork.name template if present
+			if resource.Transport.Maestro.ManifestWork != nil && resource.Transport.Maestro.ManifestWork.Name != "" {
+				v.validateTemplateString(resource.Transport.Maestro.ManifestWork.Name, maestroPath+"."+FieldManifestWork+"."+FieldName)
+			}
 		}
 	}
 }
