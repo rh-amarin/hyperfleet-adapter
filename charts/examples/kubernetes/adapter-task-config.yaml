@@ -119,7 +119,6 @@ spec:
         namespace: "*"
         bySelectors:
           labelSelector:
-            hyperfleet.io/generation: "{{ .generationSpec }}"
             hyperfleet.io/cluster-id: "{{ .clusterId }}"
             hyperfleet.io/resource-type: "role"
 
@@ -132,9 +131,8 @@ spec:
         namespace: "*"
         bySelectors:
           labelSelector:
-            hyperfleet.io/generation: "{{ .generationSpec }}"
             hyperfleet.io/cluster-id: "{{ .clusterId }}"
-            hyperfleet.io/resource-type: "rolebinding"
+            hyperfleet.io/resource-type: "role-binding"
 
     - name: "jobNamespace"
       transport:
@@ -145,8 +143,8 @@ spec:
         namespace: "*"
         bySelectors:
           labelSelector:
-            hyperfleet.io/generation: "{{ .generationSpec }}"
             hyperfleet.io/cluster-id: "{{ .clusterId }}"
+            hyperfleet.io/resource-type: "job"
 
     # the following configuration is for a deployment that will be created in the cluster
     # in the same namespace as the adapter
@@ -161,7 +159,7 @@ spec:
         namespace: "*"
         bySelectors:
           labelSelector:
-            hyperfleet.io/generation: "{{ .generationSpec }}"
+            hyperfleet.io/resource-type: "deployment"
             hyperfleet.io/cluster-id: "{{ .clusterId }}"
 
   # Post-processing with valid CEL expressions
@@ -176,10 +174,10 @@ spec:
             - type: "Applied"
               status:
                 expression: |
-                  has(resources.jobNamespace.spec) ? "True" : "False"
+                  has(resources.jobNamespace) ? "True" : "False"
               reason:
                 expression: |
-                  has(resources.jobNamespace.spec)
+                  has(resources.jobNamespace)
                     ? "JobApplied"
                     : "JobPending"
               message:
@@ -191,9 +189,9 @@ spec:
             - type: "Available"
               status:
                 expression: |
-                  has(resources.jobNamespace.status.conditions) ?
+                  has(resources.jobNamespace) ?
                    ( resources.?jobNamespace.?status.?conditions.orValue([]).exists(c, c.type == "Available")
-                    ? resources.jobNamespace.status.conditions.filter(c, c.type == "Available")[0].status : "False")
+                    ? resources.jobNamespace.status.conditions.filter(c, c.type == "Available")[0].status : "Unknown")
                    : "Unknown"
               reason:
                 expression: |

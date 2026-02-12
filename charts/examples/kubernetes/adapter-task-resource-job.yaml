@@ -13,8 +13,10 @@ kind: Job
 metadata:
   name: example-job
   namespace: "{{ .clusterId }}"                        # <- this gets resolved from adapterconfig params
+  labels:
+    hyperfleet.io/cluster-id: "{{ .clusterId }}"
+    hyperfleet.io/resource-type: "job"
   annotations:
-    hyperfleet.io/cluster-id: "{{ .clusterId }}"       # <- this gets resolved from adapterconfig params
     hyperfleet.io/generation: "{{ .generationSpec }}"  # <- this gets resolved from adapterconfig params
 spec:
   backoffLimit: 0

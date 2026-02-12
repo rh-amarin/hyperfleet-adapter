@@ -6,7 +6,7 @@ metadata:
   namespace: "{{ .namespace }}"
   labels:
     hyperfleet.io/cluster-id: "{{ .clusterId }}"
-    hyperfleet.io/managed-by: "{{ .metadata.name }}"
+    hyperfleet.io/resource-type: "deployment"
   annotations:
     hyperfleet.io/generation: "{{ .generationSpec }}"
 spec:
