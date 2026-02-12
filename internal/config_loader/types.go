@@ -305,17 +305,27 @@ type TransportConfig struct {
 type MaestroTransportConfig struct {
 	// TargetCluster is the name of the target cluster (consumer) for ManifestWork delivery
 	TargetCluster string `yaml:"targetCluster" validate:"required"`
-	// ManifestWork is the ManifestWork template, either inline or as a ref to an external file
-	ManifestWork interface{} `yaml:"manifestWork,omitempty"`
 }
 
-// Resource represents a Kubernetes resource configuration
+// Resource represents a resource configuration.
+// The manifest field holds either a K8s resource (for kubernetes transport)
+// or a ManifestWork (for maestro transport). The transport client determines
+// how to parse and apply it.
 type Resource struct {
 	Name             string           `yaml:"name" validate:"required,resourcename"`
 	Transport        *TransportConfig `yaml:"transport,omitempty"`
 	Manifest         interface{}      `yaml:"manifest,omitempty"`
 	RecreateOnChange bool             `yaml:"recreateOnChange,omitempty"`
 	Discovery        *DiscoveryConfig `yaml:"discovery,omitempty" validate:"required"`
+	// NestedDiscoveries defines how to discover individual sub-resources within the applied manifest.
+	// For example, discovering resources inside a ManifestWork's workload.
+	NestedDiscoveries []NestedDiscovery `yaml:"nestedDiscoveries,omitempty" validate:"dive"`
+}
+
+// NestedDiscovery defines a named discovery for a sub-resource within the parent manifest.
+type NestedDiscovery struct {
+	Name      string           `yaml:"name" validate:"required,resourcename"`
+	Discovery *DiscoveryConfig `yaml:"discovery" validate:"required"`
 }
 
 // DiscoveryConfig represents resource discovery configuration

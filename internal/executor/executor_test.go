@@ -577,9 +577,9 @@ func TestSequentialExecution_Resources(t *testing.T) {
 			expectFailure:   false,
 		},
 		{
-			name: "first resource invalid - stops immediately",
+			name: "first resource has no manifest - stops immediately",
 			resources: []config_loader.Resource{
-				{Name: "resource1", Manifest: map[string]interface{}{"kind": "ConfigMap"}}, // Missing apiVersion
+				{Name: "resource1"}, // No manifest at all
 				{
 					Name: "resource2",
 					Manifest: map[string]interface{}{

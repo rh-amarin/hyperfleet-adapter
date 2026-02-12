@@ -17,20 +17,20 @@ import (
 // allowing the executor to use either as the transport backend.
 type K8sClient interface {
 	// Embed TransportClient interface
-	// This provides: ApplyResources, GetResource, DiscoverResources
+	// This provides: ApplyResource([]byte), GetResource, DiscoverResources
 	transport_client.TransportClient
 
-	// ApplyResource creates or updates a single Kubernetes resource based on generation comparison.
-	// This is a K8sClient-specific convenience method for single resource operations.
+	// ApplyManifest creates or updates a single Kubernetes resource based on generation comparison.
+	// This is a K8sClient-specific method for applying parsed unstructured resources.
 	//
 	// If the resource doesn't exist, it creates it.
 	// If it exists and the generation differs, it updates (or recreates if RecreateOnChange=true).
 	// If it exists and the generation matches, it skips the update (idempotent).
 	//
 	// The manifest must have the hyperfleet.io/generation annotation set.
-	ApplyResource(ctx context.Context, newManifest *unstructured.Unstructured, existing *unstructured.Unstructured, opts *ApplyOptions) (*ApplyResult, error)
+	ApplyManifest(ctx context.Context, newManifest *unstructured.Unstructured, existing *unstructured.Unstructured, opts *ApplyOptions) (*ApplyResult, error)
 
-	// Resource CRUD operations (additional to ResourceApplier)
+	// Resource CRUD operations
 
 	// CreateResource creates a new Kubernetes resource.
 	// Returns the created resource with server-generated fields populated.

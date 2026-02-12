@@ -586,33 +586,7 @@ func TestValidateTransportConfig(t *testing.T) {
 		require.NoError(t, v.ValidateSemantic())
 	})
 
-	t.Run("valid maestro transport with inline manifestWork", func(t *testing.T) {
-		cfg := baseTaskConfig()
-		cfg.Spec.Resources = []Resource{{
-			Name: "testMW",
-			Transport: &TransportConfig{
-				Client: TransportClientMaestro,
-				Maestro: &MaestroTransportConfig{
-					TargetCluster: "cluster1",
-					ManifestWork: map[string]interface{}{
-						"apiVersion": "work.open-cluster-management.io/v1",
-						"kind":       "ManifestWork",
-						"metadata":   map[string]interface{}{"name": "test-mw"},
-					},
-				},
-			},
-			Discovery: &DiscoveryConfig{
-				BySelectors: &SelectorConfig{
-					LabelSelector: map[string]string{"app": "test"},
-				},
-			},
-		}}
-		v := newTaskValidator(cfg)
-		require.NoError(t, v.ValidateStructure())
-		require.NoError(t, v.ValidateSemantic())
-	})
-
-	t.Run("valid maestro transport with manifest field", func(t *testing.T) {
+	t.Run("valid maestro transport with inline manifest (ManifestWork)", func(t *testing.T) {
 		cfg := baseTaskConfig()
 		cfg.Spec.Resources = []Resource{{
 			Name: "testMW",
@@ -685,14 +659,14 @@ func TestValidateTransportConfig(t *testing.T) {
 		cfg.Spec.Resources = []Resource{{
 			Name: "testMW",
 			Transport: &TransportConfig{
-				Client: TransportClientMaestro,
+				Client:  TransportClientMaestro,
 				Maestro: &MaestroTransportConfig{
 					// Missing TargetCluster
-					ManifestWork: map[string]interface{}{
-						"apiVersion": "work.open-cluster-management.io/v1",
-						"kind":       "ManifestWork",
-					},
 				},
+			},
+			Manifest: map[string]interface{}{
+				"apiVersion": "work.open-cluster-management.io/v1",
+				"kind":       "ManifestWork",
 			},
 			Discovery: &DiscoveryConfig{
 				BySelectors: &SelectorConfig{
@@ -707,7 +681,7 @@ func TestValidateTransportConfig(t *testing.T) {
 		assert.Contains(t, err.Error(), "targetCluster")
 	})
 
-	t.Run("maestro transport missing both manifest and manifestWork", func(t *testing.T) {
+	t.Run("maestro transport missing manifest", func(t *testing.T) {
 		cfg := baseTaskConfig()
 		cfg.Spec.Resources = []Resource{{
 			Name: "testMW",
@@ -715,10 +689,9 @@ func TestValidateTransportConfig(t *testing.T) {
 				Client: TransportClientMaestro,
 				Maestro: &MaestroTransportConfig{
 					TargetCluster: "cluster1",
-					// No ManifestWork
 				},
 			},
-			// No Manifest either
+			// No Manifest
 			Discovery: &DiscoveryConfig{
 				BySelectors: &SelectorConfig{
 					LabelSelector: map[string]string{"app": "test"},
@@ -729,7 +702,7 @@ func TestValidateTransportConfig(t *testing.T) {
 		_ = v.ValidateStructure()
 		err := v.ValidateSemantic()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "either manifestWork or manifest must be set")
+		assert.Contains(t, err.Error(), "manifest is required for maestro transport")
 	})
 
 	t.Run("kubernetes transport missing manifest", func(t *testing.T) {
@@ -773,12 +746,12 @@ func TestValidateTransportConfig(t *testing.T) {
 				Client: TransportClientMaestro,
 				Maestro: &MaestroTransportConfig{
 					TargetCluster: "{{ .clusterName }}",
-					ManifestWork: map[string]interface{}{
-						"apiVersion": "work.open-cluster-management.io/v1",
-						"kind":       "ManifestWork",
-						"metadata":   map[string]interface{}{"name": "test"},
-					},
 				},
+			},
+			Manifest: map[string]interface{}{
+				"apiVersion": "work.open-cluster-management.io/v1",
+				"kind":       "ManifestWork",
+				"metadata":   map[string]interface{}{"name": "test"},
 			},
 			Discovery: &DiscoveryConfig{
 				BySelectors: &SelectorConfig{
@@ -799,12 +772,12 @@ func TestValidateTransportConfig(t *testing.T) {
 				Client: TransportClientMaestro,
 				Maestro: &MaestroTransportConfig{
 					TargetCluster: "{{ .undefinedVar }}",
-					ManifestWork: map[string]interface{}{
-						"apiVersion": "work.open-cluster-management.io/v1",
-						"kind":       "ManifestWork",
-						"metadata":   map[string]interface{}{"name": "test"},
-					},
 				},
+			},
+			Manifest: map[string]interface{}{
+				"apiVersion": "work.open-cluster-management.io/v1",
+				"kind":       "ManifestWork",
+				"metadata":   map[string]interface{}{"name": "test"},
 			},
 			Discovery: &DiscoveryConfig{
 				BySelectors: &SelectorConfig{
@@ -820,7 +793,7 @@ func TestValidateTransportConfig(t *testing.T) {
 	})
 
 	t.Run("maestro transport skips K8s manifest validation", func(t *testing.T) {
-		// Maestro resources without a manifest field should skip K8s manifest validation
+		// Maestro resources use manifest for ManifestWork content - should skip K8s apiVersion/kind validation
 		cfg := baseTaskConfig()
 		cfg.Spec.Resources = []Resource{{
 			Name: "testMW",
@@ -828,14 +801,12 @@ func TestValidateTransportConfig(t *testing.T) {
 				Client: TransportClientMaestro,
 				Maestro: &MaestroTransportConfig{
 					TargetCluster: "cluster1",
-					ManifestWork: map[string]interface{}{
-						// ManifestWork content - not validated as K8s manifest
-						"apiVersion": "work.open-cluster-management.io/v1",
-						"kind":       "ManifestWork",
-					},
 				},
 			},
-			// No Manifest field - this should not trigger "missing apiVersion" etc.
+			Manifest: map[string]interface{}{
+				"apiVersion": "work.open-cluster-management.io/v1",
+				"kind":       "ManifestWork",
+			},
 			Discovery: &DiscoveryConfig{
 				BySelectors: &SelectorConfig{
 					LabelSelector: map[string]string{"app": "test"},
@@ -848,14 +819,14 @@ func TestValidateTransportConfig(t *testing.T) {
 	})
 }
 
-func TestValidateFileReferencesManifestWorkRef(t *testing.T) {
+func TestValidateFileReferencesManifestRef(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create a test manifestWork file
-	manifestWorkDir := filepath.Join(tmpDir, "templates")
-	require.NoError(t, os.MkdirAll(manifestWorkDir, 0755))
-	manifestWorkFile := filepath.Join(manifestWorkDir, "manifestwork.yaml")
-	require.NoError(t, os.WriteFile(manifestWorkFile, []byte("apiVersion: work.open-cluster-management.io/v1\nkind: ManifestWork"), 0644))
+	// Create a test manifest file (ManifestWork content)
+	manifestDir := filepath.Join(tmpDir, "templates")
+	require.NoError(t, os.MkdirAll(manifestDir, 0755))
+	manifestFile := filepath.Join(manifestDir, "manifestwork.yaml")
+	require.NoError(t, os.WriteFile(manifestFile, []byte("apiVersion: work.open-cluster-management.io/v1\nkind: ManifestWork"), 0644))
 
 	tests := []struct {
 		name    string
@@ -864,7 +835,7 @@ func TestValidateFileReferencesManifestWorkRef(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name: "valid manifestWork ref",
+			name: "valid manifest ref for maestro transport",
 			config: &AdapterTaskConfig{
 				APIVersion: "hyperfleet.redhat.com/v1alpha1",
 				Kind:       "AdapterTaskConfig",
@@ -876,10 +847,10 @@ func TestValidateFileReferencesManifestWorkRef(t *testing.T) {
 							Client: TransportClientMaestro,
 							Maestro: &MaestroTransportConfig{
 								TargetCluster: "cluster1",
-								ManifestWork: map[string]interface{}{
-									"ref": "templates/manifestwork.yaml",
-								},
 							},
+						},
+						Manifest: map[string]interface{}{
+							"ref": "templates/manifestwork.yaml",
 						},
 						Discovery: &DiscoveryConfig{
 							BySelectors: &SelectorConfig{
@@ -892,7 +863,7 @@ func TestValidateFileReferencesManifestWorkRef(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "invalid manifestWork ref - file not found",
+			name: "invalid manifest ref - file not found",
 			config: &AdapterTaskConfig{
 				APIVersion: "hyperfleet.redhat.com/v1alpha1",
 				Kind:       "AdapterTaskConfig",
@@ -904,10 +875,10 @@ func TestValidateFileReferencesManifestWorkRef(t *testing.T) {
 							Client: TransportClientMaestro,
 							Maestro: &MaestroTransportConfig{
 								TargetCluster: "cluster1",
-								ManifestWork: map[string]interface{}{
-									"ref": "templates/nonexistent.yaml",
-								},
 							},
+						},
+						Manifest: map[string]interface{}{
+							"ref": "templates/nonexistent.yaml",
 						},
 						Discovery: &DiscoveryConfig{
 							BySelectors: &SelectorConfig{
@@ -921,7 +892,7 @@ func TestValidateFileReferencesManifestWorkRef(t *testing.T) {
 			errMsg:  "does not exist",
 		},
 		{
-			name: "inline manifestWork - no file reference validation needed",
+			name: "inline manifest - no file reference validation needed",
 			config: &AdapterTaskConfig{
 				APIVersion: "hyperfleet.redhat.com/v1alpha1",
 				Kind:       "AdapterTaskConfig",
@@ -933,11 +904,11 @@ func TestValidateFileReferencesManifestWorkRef(t *testing.T) {
 							Client: TransportClientMaestro,
 							Maestro: &MaestroTransportConfig{
 								TargetCluster: "cluster1",
-								ManifestWork: map[string]interface{}{
-									"apiVersion": "work.open-cluster-management.io/v1",
-									"kind":       "ManifestWork",
-								},
 							},
+						},
+						Manifest: map[string]interface{}{
+							"apiVersion": "work.open-cluster-management.io/v1",
+							"kind":       "ManifestWork",
 						},
 						Discovery: &DiscoveryConfig{
 							BySelectors: &SelectorConfig{

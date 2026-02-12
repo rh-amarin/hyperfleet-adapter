@@ -79,7 +79,6 @@ const (
 	FieldClient        = "client"
 	FieldMaestro       = "maestro"
 	FieldTargetCluster = "targetCluster"
-	FieldManifestWork  = "manifestWork"
 )
 
 // Transport client types
@@ -90,9 +89,10 @@ const (
 
 // Resource field names
 const (
-	FieldManifest         = "manifest"
-	FieldRecreateOnChange = "recreateOnChange"
-	FieldDiscovery        = "discovery"
+	FieldManifest          = "manifest"
+	FieldRecreateOnChange  = "recreateOnChange"
+	FieldDiscovery         = "discovery"
+	FieldNestedDiscoveries = "nestedDiscoveries"
 )
 
 // Manifest reference field names

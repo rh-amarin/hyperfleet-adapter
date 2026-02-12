@@ -2,6 +2,7 @@ package k8s_client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -10,52 +11,54 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/yaml"
 )
 
 // Type aliases for backward compatibility.
-// These types are now defined in the transport_client package.
 type (
-	ApplyOptions         = transport_client.ApplyOptions
-	ApplyResult          = transport_client.ApplyResult
-	ResourceToApply      = transport_client.ResourceToApply
-	ResourceApplyResult  = transport_client.ResourceApplyResult
-	ApplyResourcesResult = transport_client.ApplyResourcesResult
+	ApplyOptions = transport_client.ApplyOptions
+	ApplyResult  = transport_client.ApplyResult
 )
 
-// ApplyResource creates or updates a Kubernetes resource based on generation comparison.
-// This is the generation-aware upsert operation that mirrors maestro_client.ApplyManifestWork.
+// ApplyResource implements transport_client.TransportClient.
+// It accepts rendered JSON/YAML bytes, parses them into an unstructured K8s resource,
+// discovers the existing resource by name, and applies with generation comparison.
+func (c *Client) ApplyResource(
+	ctx context.Context,
+	manifestBytes []byte,
+	opts *transport_client.ApplyOptions,
+	_ transport_client.TransportContext,
+) (*transport_client.ApplyResult, error) {
+	if len(manifestBytes) == 0 {
+		return nil, fmt.Errorf("manifest bytes cannot be empty")
+	}
+
+	// Parse bytes into unstructured
+	obj, err := parseToUnstructured(manifestBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	}
+
+	// Discover existing resource by name
+	gvk := obj.GroupVersionKind()
+	existing, err := c.GetResource(ctx, gvk, obj.GetNamespace(), obj.GetName(), nil)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("failed to get existing resource %s/%s: %w", gvk.Kind, obj.GetName(), err)
+	}
+
+	// Apply with generation comparison
+	return c.ApplyManifest(ctx, obj, existing, opts)
+}
+
+// ApplyManifest creates or updates a Kubernetes resource based on generation comparison.
+// This is the K8s-specific method that operates on parsed unstructured resources.
 //
 // If the resource doesn't exist, it creates it.
 // If it exists and the generation differs, it updates (or recreates if RecreateOnChange=true).
 // If it exists and the generation matches, it skips the update (idempotent).
 //
 // The manifest must have the hyperfleet.io/generation annotation set.
-// Use manifest.ValidateManifest() to validate before calling.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - newManifest: The desired resource state (must have generation annotation)
-//   - existing: The current resource state (nil if not found/discovered)
-//   - opts: Apply options (can be nil for defaults)
-//
-// Returns:
-//   - ApplyResult containing the resource and operation details
-//   - Error if the operation fails
-//
-// Example:
-//
-//	// Discover existing resource first
-//	existing, _ := client.DiscoverResources(ctx, gvk, discovery)
-//	var existingResource *unstructured.Unstructured
-//	if len(existing.Items) > 0 {
-//	    existingResource = manifest.GetLatestGenerationFromList(existing)
-//	}
-//
-//	// Apply with generation tracking
-//	result, err := client.ApplyResource(ctx, newManifest, existingResource, &ApplyOptions{
-//	    RecreateOnChange: true,
-//	})
-func (c *Client) ApplyResource(
+func (c *Client) ApplyManifest(
 	ctx context.Context,
 	newManifest *unstructured.Unstructured,
 	existing *unstructured.Unstructured,
@@ -95,104 +98,33 @@ func (c *Client) ApplyResource(
 	gvk := newManifest.GroupVersionKind()
 	name := newManifest.GetName()
 
-	c.log.Debugf(ctx, "ApplyResource %s/%s: operation=%s reason=%s",
+	c.log.Debugf(ctx, "ApplyManifest %s/%s: operation=%s reason=%s",
 		gvk.Kind, name, result.Operation, result.Reason)
 
 	// Execute the operation
-	var err error
+	var applyErr error
 	switch result.Operation {
 	case manifest.OperationCreate:
-		result.Resource, err = c.CreateResource(ctx, newManifest)
+		_, applyErr = c.CreateResource(ctx, newManifest)
 
 	case manifest.OperationUpdate:
 		// Preserve resourceVersion and UID from existing for update
 		newManifest.SetResourceVersion(existing.GetResourceVersion())
 		newManifest.SetUID(existing.GetUID())
-		result.Resource, err = c.UpdateResource(ctx, newManifest)
+		_, applyErr = c.UpdateResource(ctx, newManifest)
 
 	case manifest.OperationRecreate:
-		result.Resource, err = c.recreateResource(ctx, existing, newManifest)
+		_, applyErr = c.recreateResource(ctx, existing, newManifest)
 
 	case manifest.OperationSkip:
-		result.Resource = existing
+		// Nothing to do
 	}
 
-	if err != nil {
+	if applyErr != nil {
 		return nil, fmt.Errorf("failed to %s resource %s/%s: %w",
-			result.Operation, gvk.Kind, name, err)
+			result.Operation, gvk.Kind, name, applyErr)
 	}
 
-	return result, nil
-}
-
-// ApplyResources applies multiple Kubernetes resources in sequence.
-// This is a batch version of ApplyResource that processes resources one by one,
-// stopping on first error (fail-fast behavior).
-//
-// Each resource in the batch can have its own ApplyOptions (e.g., RecreateOnChange).
-// Resources are processed in order, and results are returned for all processed resources.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - resources: List of resources to apply (must have generation annotations)
-//
-// Returns:
-//   - ApplyResourcesResult containing results for all processed resources
-//   - Error if any resource fails (results will contain partial results up to failure)
-//
-// Example:
-//
-//	resources := []k8s_client.ResourceToApply{
-//	    {Name: "configmap", Manifest: cm, Existing: existingCM, Options: nil},
-//	    {Name: "deployment", Manifest: deploy, Existing: existingDeploy, Options: &k8s_client.ApplyOptions{RecreateOnChange: true}},
-//	}
-//	result, err := client.ApplyResources(ctx, resources)
-//	if err != nil {
-//	    // Check result.Results for partial results
-//	}
-func (c *Client) ApplyResources(
-	ctx context.Context,
-	resources []ResourceToApply,
-) (*ApplyResourcesResult, error) {
-	result := &ApplyResourcesResult{
-		Results: make([]*ResourceApplyResult, 0, len(resources)),
-	}
-
-	for _, r := range resources {
-		resourceResult := &ResourceApplyResult{
-			Name: r.Name,
-		}
-
-		// Validate manifest
-		if r.Manifest == nil {
-			resourceResult.Error = fmt.Errorf("manifest cannot be nil for resource %s", r.Name)
-			result.Results = append(result.Results, resourceResult)
-			result.FailedCount++
-			return result, resourceResult.Error
-		}
-
-		// Extract resource info for logging and result
-		resourceResult.Kind = r.Manifest.GetKind()
-		resourceResult.Namespace = r.Manifest.GetNamespace()
-		resourceResult.ResourceName = r.Manifest.GetName()
-
-		// Apply the resource
-		applyResult, err := c.ApplyResource(ctx, r.Manifest, r.Existing, r.Options)
-		if err != nil {
-			resourceResult.Error = err
-			result.Results = append(result.Results, resourceResult)
-			result.FailedCount++
-			return result, fmt.Errorf("failed to apply resource %s: %w", r.Name, err)
-		}
-
-		resourceResult.ApplyResult = applyResult
-		result.Results = append(result.Results, resourceResult)
-		result.SuccessCount++
-
-		c.log.Debugf(ctx, "Applied resource %s: operation=%s reason=%s", r.Name, applyResult.Operation, applyResult.Reason)
-	}
-
-	c.log.Infof(ctx, "Applied %d resources successfully", result.SuccessCount)
 	return result, nil
 }
 
@@ -258,4 +190,26 @@ func (c *Client) waitForDeletion(
 			c.log.Debugf(ctx, "Resource %s/%s still exists, waiting for deletion...", gvk.Kind, name)
 		}
 	}
+}
+
+// parseToUnstructured parses JSON or YAML bytes into an unstructured Kubernetes resource.
+func parseToUnstructured(data []byte) (*unstructured.Unstructured, error) {
+	obj := &unstructured.Unstructured{}
+
+	// Try JSON first
+	if err := json.Unmarshal(data, &obj.Object); err == nil && obj.Object != nil {
+		return obj, nil
+	}
+
+	// Fall back to YAML → JSON → unstructured
+	jsonData, err := yaml.YAMLToJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert YAML to JSON: %w", err)
+	}
+
+	if err := json.Unmarshal(jsonData, &obj.Object); err != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	}
+
+	return obj, nil
 }

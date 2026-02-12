@@ -25,6 +25,7 @@ spec:
       type: "string"
       required: true
 
+
   # Preconditions with valid operators and CEL expressions
   preconditions:
     - name: "clusterStatus"
@@ -101,6 +102,17 @@ spec:
         - name: "mgmtConfigMap"
           discovery:
             byName: "{{ .clusterId }}"
+
+    
+    # Namespace resource creation with k8s transport client on the adapter deployment cluster'
+    # transport will be fallback to kubernetes if not set.
+    - name: "namespace"
+      transport:
+        client: "kubernetes"
+      manifest:
+        ref: "/etc/adapter/adapter-task-resource-namespace.yaml"
+      discovery:
+        byName: "{{ .clusterId }}"
 
   # Post-processing with valid CEL expressions
   # This example contains multiple resources, we will only report on the conditions of the jobNamespace not to overcomplicate the example

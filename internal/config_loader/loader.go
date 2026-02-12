@@ -210,24 +210,6 @@ func loadTaskConfigFileReferences(config *AdapterTaskConfig, baseDir string) err
 		resource.Manifest = content
 	}
 
-	// Load transport.maestro.manifestWork.ref in spec.resources
-	for i := range config.Spec.Resources {
-		resource := &config.Spec.Resources[i]
-		ref := resource.GetManifestWorkRef()
-		if ref == "" {
-			continue
-		}
-
-		content, err := loadYAMLFile(baseDir, ref)
-		if err != nil {
-			return fmt.Errorf("%s.%s[%d].%s.%s.%s.%s: %w",
-				FieldSpec, FieldResources, i, FieldTransport, FieldMaestro, FieldManifestWork, FieldRef, err)
-		}
-
-		// Replace manifestWork with loaded content
-		resource.Transport.Maestro.ManifestWork = content
-	}
-
 	// Load buildRef in spec.post.payloads
 	if config.Spec.Post != nil {
 		for i := range config.Spec.Post.Payloads {

@@ -13,26 +13,25 @@ import (
 // to be applied via different backends:
 //   - Direct Kubernetes API (k8s_client)
 //   - Maestro/OCM ManifestWork (maestro_client)
-//   - Other backends (GitOps, Argo, etc.)
 //
 // All implementations must support generation-aware apply operations:
 //   - Create if resource doesn't exist
 //   - Update if generation changed
 //   - Skip if generation matches (idempotent)
-//
-// Methods accept an optional TransportContext (any) for per-request routing:
-//   - k8s_client ignores it (pass nil)
-//   - maestro_client expects its own concrete context type
 type TransportClient interface {
-	// ApplyResources applies multiple Kubernetes resources.
-	// Implementation details vary by backend:
-	//   - k8s_client: applies resources sequentially, stopping on first error
-	//   - maestro_client: bundles all resources into a single ManifestWork
+	// ApplyResource applies a rendered manifest (JSON/YAML bytes).
+	// Each backend parses the bytes into its expected type:
+	//   - k8s_client: parses as K8s resource (unstructured), applies to K8s API
+	//   - maestro_client: parses as ManifestWork, applies via Maestro gRPC
 	//
-	// Each resource in the batch can have its own ApplyOptions (e.g., RecreateOnChange).
-	// The Target field in ResourceToApply provides per-request routing context.
-	// Results are returned for all processed resources.
-	ApplyResources(ctx context.Context, resources []ResourceToApply) (*ApplyResourcesResult, error)
+	// The backend handles discovery of existing resources internally for generation comparison.
+	//
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - manifest: Rendered JSON/YAML bytes of the resource to apply
+	//   - opts: Apply options (e.g., RecreateOnChange). Nil uses defaults.
+	//   - target: Per-request routing context (nil for k8s_client)
+	ApplyResource(ctx context.Context, manifest []byte, opts *ApplyOptions, target TransportContext) (*ApplyResult, error)
 
 	// GetResource retrieves a single Kubernetes resource by GVK, namespace, and name.
 	// The target parameter provides per-request routing context (nil for k8s_client).

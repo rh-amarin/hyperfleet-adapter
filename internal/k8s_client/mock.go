@@ -2,6 +2,7 @@ package k8s_client
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/manifest"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transport_client"
@@ -24,10 +25,10 @@ type MockK8sClient struct {
 	UpdateResourceResult *unstructured.Unstructured
 	UpdateResourceError  error
 	DeleteResourceError  error
+	ApplyManifestResult  *ApplyResult
+	ApplyManifestError   error
 	ApplyResourceResult  *ApplyResult
 	ApplyResourceError   error
-	ApplyResourcesResult *ApplyResourcesResult
-	ApplyResourcesError  error
 	DiscoverResult       *unstructured.UnstructuredList
 	DiscoverError        error
 }
@@ -99,54 +100,42 @@ func (m *MockK8sClient) DeleteResource(ctx context.Context, gvk schema.GroupVers
 	return nil
 }
 
-// ApplyResource implements K8sClient.ApplyResource
-func (m *MockK8sClient) ApplyResource(ctx context.Context, newManifest *unstructured.Unstructured, existing *unstructured.Unstructured, opts *ApplyOptions) (*ApplyResult, error) {
+// ApplyManifest implements K8sClient.ApplyManifest
+func (m *MockK8sClient) ApplyManifest(ctx context.Context, newManifest *unstructured.Unstructured, existing *unstructured.Unstructured, opts *ApplyOptions) (*ApplyResult, error) {
+	if m.ApplyManifestError != nil {
+		return nil, m.ApplyManifestError
+	}
+	if m.ApplyManifestResult != nil {
+		return m.ApplyManifestResult, nil
+	}
+	// Default behavior: store the resource and return create result
+	key := newManifest.GetNamespace() + "/" + newManifest.GetName()
+	m.Resources[key] = newManifest
+	return &ApplyResult{
+		Operation: manifest.OperationCreate,
+		Reason:    "mock apply",
+	}, nil
+}
+
+// ApplyResource implements transport_client.TransportClient.ApplyResource
+func (m *MockK8sClient) ApplyResource(ctx context.Context, manifestBytes []byte, opts *transport_client.ApplyOptions, _ transport_client.TransportContext) (*transport_client.ApplyResult, error) {
 	if m.ApplyResourceError != nil {
 		return nil, m.ApplyResourceError
 	}
 	if m.ApplyResourceResult != nil {
 		return m.ApplyResourceResult, nil
 	}
-	// Default behavior: store the resource and return create result
-	key := newManifest.GetNamespace() + "/" + newManifest.GetName()
-	m.Resources[key] = newManifest
-	return &ApplyResult{
-		Resource:  newManifest,
+	// Default behavior: parse and store
+	obj := &unstructured.Unstructured{}
+	if err := json.Unmarshal(manifestBytes, &obj.Object); err != nil {
+		return nil, err
+	}
+	key := obj.GetNamespace() + "/" + obj.GetName()
+	m.Resources[key] = obj
+	return &transport_client.ApplyResult{
 		Operation: manifest.OperationCreate,
 		Reason:    "mock apply",
 	}, nil
-}
-
-// ApplyResources implements K8sClient.ApplyResources
-func (m *MockK8sClient) ApplyResources(ctx context.Context, resources []ResourceToApply) (*ApplyResourcesResult, error) {
-	if m.ApplyResourcesError != nil {
-		return nil, m.ApplyResourcesError
-	}
-	if m.ApplyResourcesResult != nil {
-		return m.ApplyResourcesResult, nil
-	}
-	// Default behavior: apply each resource using ApplyResource
-	result := &ApplyResourcesResult{
-		Results: make([]*ResourceApplyResult, 0, len(resources)),
-	}
-	for _, r := range resources {
-		applyResult, err := m.ApplyResource(ctx, r.Manifest, r.Existing, r.Options)
-		resourceResult := &ResourceApplyResult{
-			Name:         r.Name,
-			Kind:         r.Manifest.GetKind(),
-			Namespace:    r.Manifest.GetNamespace(),
-			ResourceName: r.Manifest.GetName(),
-			ApplyResult:  applyResult,
-			Error:        err,
-		}
-		result.Results = append(result.Results, resourceResult)
-		if err != nil {
-			result.FailedCount++
-			return result, err
-		}
-		result.SuccessCount++
-	}
-	return result, nil
 }
 
 // DiscoverResources implements K8sClient.DiscoverResources

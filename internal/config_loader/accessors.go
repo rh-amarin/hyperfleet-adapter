@@ -185,50 +185,6 @@ func (r *Resource) IsMaestroTransport() bool {
 	return r.GetTransportClient() == TransportClientMaestro
 }
 
-// HasManifestWorkRef returns true if the maestro transport manifestWork uses a ref
-func (r *Resource) HasManifestWorkRef() bool {
-	if r == nil || r.Transport == nil || r.Transport.Maestro == nil {
-		return false
-	}
-	return r.Transport.Maestro.HasManifestWorkRef()
-}
-
-// GetManifestWorkRef returns the manifestWork ref path if set, empty string otherwise
-func (r *Resource) GetManifestWorkRef() string {
-	if r == nil || r.Transport == nil || r.Transport.Maestro == nil {
-		return ""
-	}
-	return r.Transport.Maestro.GetManifestWorkRef()
-}
-
-// HasManifestWorkRef returns true if the manifestWork uses a ref
-func (m *MaestroTransportConfig) HasManifestWorkRef() bool {
-	if m == nil || m.ManifestWork == nil {
-		return false
-	}
-	mw := normalizeToStringKeyMap(m.ManifestWork)
-	if mw == nil {
-		return false
-	}
-	_, hasRef := mw["ref"]
-	return hasRef
-}
-
-// GetManifestWorkRef returns the manifestWork ref path if set, empty string otherwise
-func (m *MaestroTransportConfig) GetManifestWorkRef() string {
-	if m == nil || m.ManifestWork == nil {
-		return ""
-	}
-	mw := normalizeToStringKeyMap(m.ManifestWork)
-	if mw == nil {
-		return ""
-	}
-	if ref, ok := mw["ref"].(string); ok {
-		return ref
-	}
-	return ""
-}
-
 // HasManifestRef returns true if the manifest uses a ref (single file reference)
 func (r *Resource) HasManifestRef() bool {
 	if r == nil || r.Manifest == nil {

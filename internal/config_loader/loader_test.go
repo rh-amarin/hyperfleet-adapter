@@ -1205,7 +1205,7 @@ func TestValidateResourceDiscoveryInTaskConfig(t *testing.T) {
 						"apiVersion": "v1",
 						"kind":       "ConfigMap",
 					},
-					// Missing discovery - now required for all resources
+					// Missing discovery - required for all resources
 				},
 			},
 			wantErr: true,
@@ -1555,133 +1555,6 @@ func TestIsMaestroTransport(t *testing.T) {
 	}
 }
 
-func TestHasManifestWorkRef(t *testing.T) {
-	tests := []struct {
-		name     string
-		resource Resource
-		want     bool
-	}{
-		{
-			name:     "nil transport",
-			resource: Resource{Name: "test"},
-			want:     false,
-		},
-		{
-			name: "maestro with no manifestWork",
-			resource: Resource{
-				Name: "test",
-				Transport: &TransportConfig{
-					Client:  "maestro",
-					Maestro: &MaestroTransportConfig{TargetCluster: "cluster1"},
-				},
-			},
-			want: false,
-		},
-		{
-			name: "maestro with inline manifestWork (no ref)",
-			resource: Resource{
-				Name: "test",
-				Transport: &TransportConfig{
-					Client: "maestro",
-					Maestro: &MaestroTransportConfig{
-						TargetCluster: "cluster1",
-						ManifestWork: map[string]interface{}{
-							"apiVersion": "work.open-cluster-management.io/v1",
-							"kind":       "ManifestWork",
-						},
-					},
-				},
-			},
-			want: false,
-		},
-		{
-			name: "maestro with manifestWork ref",
-			resource: Resource{
-				Name: "test",
-				Transport: &TransportConfig{
-					Client: "maestro",
-					Maestro: &MaestroTransportConfig{
-						TargetCluster: "cluster1",
-						ManifestWork: map[string]interface{}{
-							"ref": "/path/to/manifestwork.yaml",
-						},
-					},
-				},
-			},
-			want: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, tt.resource.HasManifestWorkRef())
-		})
-	}
-}
-
-func TestGetManifestWorkRef(t *testing.T) {
-	tests := []struct {
-		name     string
-		resource Resource
-		want     string
-	}{
-		{
-			name:     "nil transport returns empty",
-			resource: Resource{Name: "test"},
-			want:     "",
-		},
-		{
-			name: "maestro with no manifestWork returns empty",
-			resource: Resource{
-				Name: "test",
-				Transport: &TransportConfig{
-					Client:  "maestro",
-					Maestro: &MaestroTransportConfig{TargetCluster: "cluster1"},
-				},
-			},
-			want: "",
-		},
-		{
-			name: "maestro with inline manifestWork returns empty",
-			resource: Resource{
-				Name: "test",
-				Transport: &TransportConfig{
-					Client: "maestro",
-					Maestro: &MaestroTransportConfig{
-						TargetCluster: "cluster1",
-						ManifestWork: map[string]interface{}{
-							"apiVersion": "work.open-cluster-management.io/v1",
-						},
-					},
-				},
-			},
-			want: "",
-		},
-		{
-			name: "maestro with manifestWork ref",
-			resource: Resource{
-				Name: "test",
-				Transport: &TransportConfig{
-					Client: "maestro",
-					Maestro: &MaestroTransportConfig{
-						TargetCluster: "cluster1",
-						ManifestWork: map[string]interface{}{
-							"ref": "/etc/adapter/manifestwork.yaml",
-						},
-					},
-				},
-			},
-			want: "/etc/adapter/manifestwork.yaml",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, tt.resource.GetManifestWorkRef())
-		})
-	}
-}
-
 func TestLoadConfigWithManifestWorkRef(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -1728,8 +1601,8 @@ spec:
         client: "maestro"
         maestro:
           targetCluster: "{{ .clusterName }}"
-          manifestWork:
-            ref: "manifestwork.yaml"
+      manifest:
+        ref: "manifestwork.yaml"
       discovery:
         bySelectors:
           labelSelector:
@@ -1746,15 +1619,12 @@ spec:
 	require.NoError(t, err)
 	require.NotNil(t, config)
 
-	// Verify manifestWork ref was loaded and replaced
+	// Verify manifest ref was loaded and replaced with ManifestWork content
 	require.Len(t, config.Spec.Resources, 1)
 	resource := config.Spec.Resources[0]
-	require.NotNil(t, resource.Transport)
-	require.NotNil(t, resource.Transport.Maestro)
 
-	// ManifestWork should be the loaded content, not the ref
-	mw, ok := resource.Transport.Maestro.ManifestWork.(map[string]interface{})
-	require.True(t, ok, "ManifestWork should be a map after loading ref")
+	mw, ok := resource.Manifest.(map[string]interface{})
+	require.True(t, ok, "Manifest should be a map after loading ref")
 	assert.Equal(t, "work.open-cluster-management.io/v1", mw["apiVersion"])
 	assert.Equal(t, "ManifestWork", mw["kind"])
 
@@ -1794,8 +1664,8 @@ spec:
         client: "maestro"
         maestro:
           targetCluster: "cluster1"
-          manifestWork:
-            ref: "nonexistent-manifestwork.yaml"
+      manifest:
+        ref: "nonexistent-manifestwork.yaml"
       discovery:
         bySelectors:
           labelSelector:
@@ -1848,14 +1718,14 @@ spec:
         client: "maestro"
         maestro:
           targetCluster: "{{ .clusterName }}"
-          manifestWork:
-            apiVersion: work.open-cluster-management.io/v1
-            kind: ManifestWork
-            metadata:
-              name: "inline-mw"
-            spec:
-              workload:
-                manifests: []
+      manifest:
+        apiVersion: work.open-cluster-management.io/v1
+        kind: ManifestWork
+        metadata:
+          name: "inline-mw"
+        spec:
+          workload:
+            manifests: []
       discovery:
         bySelectors:
           labelSelector:
@@ -1872,14 +1742,12 @@ spec:
 	require.NoError(t, err)
 	require.NotNil(t, config)
 
-	// Verify inline manifestWork is preserved as-is
+	// Verify inline manifest (ManifestWork) is preserved as-is
 	require.Len(t, config.Spec.Resources, 1)
 	resource := config.Spec.Resources[0]
-	require.NotNil(t, resource.Transport)
-	require.NotNil(t, resource.Transport.Maestro)
 
-	mw, ok := resource.Transport.Maestro.ManifestWork.(map[string]interface{})
-	require.True(t, ok, "ManifestWork should be a map")
+	mw, ok := resource.Manifest.(map[string]interface{})
+	require.True(t, ok, "Manifest should be a map")
 	assert.Equal(t, "work.open-cluster-management.io/v1", mw["apiVersion"])
 	assert.Equal(t, "ManifestWork", mw["kind"])
 }

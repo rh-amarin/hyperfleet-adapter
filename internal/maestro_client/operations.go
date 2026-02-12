@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/manifest"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/constants"
 	apperrors "github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/errors"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kubetypes "k8s.io/apimachinery/pkg/types"
 	workv1 "open-cluster-management.io/api/work/v1"
 )
@@ -192,7 +195,7 @@ func (c *Client) ApplyManifestWork(
 	ctx context.Context,
 	consumerName string,
 	manifestWork *workv1.ManifestWork,
-) (*workv1.ManifestWork, error) {
+) (*ApplyManifestWorkResult, error) {
 	if manifestWork == nil {
 		return nil, apperrors.MaestroError("work cannot be nil")
 	}
@@ -236,16 +239,23 @@ func (c *Client) ApplyManifestWork(
 	// Execute operation based on comparison result
 	switch decision.Operation {
 	case manifest.OperationCreate:
-		return c.CreateManifestWork(ctx, consumerName, manifestWork)
-	case manifest.OperationSkip:
-		return existing, nil
-	case manifest.OperationUpdate:
-		// Use Patch instead of Update since Maestro gRPC doesn't support Update
-		patchData, err := createManifestWorkPatch(manifestWork)
-		if err != nil {
-			return nil, apperrors.MaestroError("failed to create patch: %v", err)
+		work, createErr := c.CreateManifestWork(ctx, consumerName, manifestWork)
+		if createErr != nil {
+			return nil, createErr
 		}
-		return c.PatchManifestWork(ctx, consumerName, manifestWork.Name, patchData)
+		return &ApplyManifestWorkResult{Work: work, Operation: decision.Operation, Reason: decision.Reason}, nil
+	case manifest.OperationSkip:
+		return &ApplyManifestWorkResult{Work: existing, Operation: decision.Operation, Reason: decision.Reason}, nil
+	case manifest.OperationUpdate:
+		patchData, patchErr := createManifestWorkPatch(manifestWork)
+		if patchErr != nil {
+			return nil, apperrors.MaestroError("failed to create patch: %v", patchErr)
+		}
+		work, patchErr := c.PatchManifestWork(ctx, consumerName, manifestWork.Name, patchData)
+		if patchErr != nil {
+			return nil, patchErr
+		}
+		return &ApplyManifestWorkResult{Work: work, Operation: decision.Operation, Reason: decision.Reason}, nil
 	default:
 		return nil, apperrors.MaestroError("unexpected operation: %s", decision.Operation)
 	}
@@ -301,8 +311,15 @@ func (c *Client) DiscoverManifest(
 		return nil, err
 	}
 
+	// Convert typed ManifestWork to unstructured for shared discovery logic
+	workUnstructured, err := workToUnstructured(work)
+	if err != nil {
+		return nil, apperrors.MaestroError("failed to convert ManifestWork %s/%s to unstructured: %v",
+			consumerName, workName, err)
+	}
+
 	// Use shared discovery logic from manifest package
-	list, err := manifest.DiscoverInManifestWork(work, discovery)
+	list, err := manifest.DiscoverNestedManifest(workUnstructured, discovery)
 	if err != nil {
 		return nil, apperrors.MaestroError("failed to discover manifests in %s/%s: %v",
 			consumerName, workName, err)
@@ -316,18 +333,34 @@ func (c *Client) DiscoverManifest(
 }
 
 // DiscoverManifestInWork finds manifests within an already-fetched ManifestWork.
-// Use this when you already have the ManifestWork object and don't need to fetch it.
+// Use this when you already have the ManifestWork as unstructured and don't need to fetch it.
 //
 // Parameters:
-//   - work: The ManifestWork to search within
+//   - work: The ManifestWork (as *unstructured.Unstructured) to search within
 //   - discovery: Discovery configuration (namespace, name, or label selector)
 //
 // Returns:
 //   - List of matching manifests as unstructured objects
 //   - The manifest with the highest generation if multiple match (use manifest.GetLatestGenerationFromList)
 func (c *Client) DiscoverManifestInWork(
-	work *workv1.ManifestWork,
+	work *unstructured.Unstructured,
 	discovery manifest.Discovery,
 ) (*unstructured.UnstructuredList, error) {
-	return manifest.DiscoverInManifestWork(work, discovery)
+	return manifest.DiscoverNestedManifest(work, discovery)
+}
+
+// workToUnstructured converts a typed *workv1.ManifestWork to *unstructured.Unstructured.
+// The Maestro API often returns ManifestWork without apiVersion/kind, so we set the GVK explicitly.
+func workToUnstructured(work *workv1.ManifestWork) (*unstructured.Unstructured, error) {
+	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(work)
+	if err != nil {
+		return nil, err
+	}
+	u := &unstructured.Unstructured{Object: obj}
+	u.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   constants.ManifestWorkGroup,
+		Version: constants.ManifestWorkVersion,
+		Kind:    constants.ManifestWorkKind,
+	})
+	return u, nil
 }

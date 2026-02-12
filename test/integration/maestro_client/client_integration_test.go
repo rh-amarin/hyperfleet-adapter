@@ -206,7 +206,8 @@ func TestMaestroClientApplyManifestWork(t *testing.T) {
 	// Consumer should be registered during test setup, so this should succeed
 	require.NoError(t, err, "ApplyManifestWork should succeed (consumer %s should be registered)", consumerName)
 	require.NotNil(t, applied)
-	t.Logf("Applied ManifestWork: %s/%s", applied.Namespace, applied.Name)
+	require.NotNil(t, applied.Work)
+	t.Logf("Applied ManifestWork: %s/%s (operation=%s)", applied.Work.Namespace, applied.Work.Name, applied.Operation)
 
 	// Now apply again with updated generation (should update)
 	work.Annotations[constants.AnnotationGeneration] = "2"
@@ -219,7 +220,8 @@ func TestMaestroClientApplyManifestWork(t *testing.T) {
 	updated, err := tc.Client.ApplyManifestWork(tc.Ctx, consumerName, work)
 	require.NoError(t, err, "ApplyManifestWork (update) should succeed")
 	require.NotNil(t, updated)
-	t.Logf("Updated ManifestWork: %s/%s", updated.Namespace, updated.Name)
+	require.NotNil(t, updated.Work)
+	t.Logf("Updated ManifestWork: %s/%s (operation=%s)", updated.Work.Namespace, updated.Work.Name, updated.Operation)
 }
 
 // TestMaestroClientGenerationSkip tests that apply skips when generation matches
@@ -275,17 +277,19 @@ func TestMaestroClientGenerationSkip(t *testing.T) {
 		t.Skipf("Skipping generation skip test - consumer may not be registered: %v", err)
 	}
 	require.NotNil(t, result1)
+	require.NotNil(t, result1.Work)
 
 	// Apply again with same generation - should skip (return existing without update)
 	result2, err := tc.Client.ApplyManifestWork(tc.Ctx, consumerName, work)
 	require.NoError(t, err)
 	require.NotNil(t, result2)
+	require.NotNil(t, result2.Work)
 
 	// When skipped, both results should refer to the same resource (same name/namespace)
-	assert.Equal(t, result1.Name, result2.Name,
+	assert.Equal(t, result1.Work.Name, result2.Work.Name,
 		"ManifestWork name should match when generation unchanged (skip)")
-	assert.Equal(t, result1.Namespace, result2.Namespace,
+	assert.Equal(t, result1.Work.Namespace, result2.Work.Namespace,
 		"ManifestWork namespace should match when generation unchanged (skip)")
-	t.Logf("Skip test passed - result1.ResourceVersion=%s, result2.ResourceVersion=%s",
-		result1.ResourceVersion, result2.ResourceVersion)
+	t.Logf("Skip test passed - operation=%s, result1.ResourceVersion=%s, result2.ResourceVersion=%s",
+		result2.Operation, result1.Work.ResourceVersion, result2.Work.ResourceVersion)
 }

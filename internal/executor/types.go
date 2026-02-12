@@ -135,8 +135,6 @@ type ResourceResult struct {
 	Status ExecutionStatus
 	// Operation is the operation performed (create, update, recreate, skip)
 	Operation manifest.Operation
-	// Resource is the created/updated resource (if successful)
-	Resource *unstructured.Unstructured
 	// OperationReason explains why this operation was performed
 	// Examples: "resource not found", "generation changed from 1 to 2", "generation 1 unchanged", "recreateOnChange=true"
 	OperationReason string
@@ -176,8 +174,10 @@ type ExecutionContext struct {
 	// - Populated during param extraction phase with event/env data
 	// - Populated during precondition phase with captured API response fields
 	Params map[string]interface{}
-	// Resources holds created/updated K8s resources keyed by resource name
-	Resources map[string]*unstructured.Unstructured
+	// Resources holds discovered resources keyed by resource name.
+	// Values are either *unstructured.Unstructured (single resource) or
+	// map[string]*unstructured.Unstructured (nested discoveries within a parent resource).
+	Resources map[string]interface{}
 	// Adapter holds adapter execution metadata
 	Adapter AdapterMetadata
 	// Evaluations tracks all condition evaluations for debugging/auditing
@@ -246,7 +246,7 @@ func NewExecutionContext(ctx context.Context, eventData map[string]interface{}, 
 		Config:      config,
 		EventData:   eventData,
 		Params:      make(map[string]interface{}),
-		Resources:   make(map[string]*unstructured.Unstructured),
+		Resources:   make(map[string]interface{}),
 		Evaluations: make([]EvaluationRecord, 0),
 		Adapter: AdapterMetadata{
 			ExecutionStatus: string(StatusSuccess),
@@ -330,11 +330,22 @@ func (ec *ExecutionContext) GetCELVariables() map[string]interface{} {
 	// Add adapter metadata (use helper from utils.go)
 	result["adapter"] = adapterMetadataToMap(&ec.Adapter)
 
-	// Add resources (convert unstructured to maps)
+	// Add resources (convert unstructured to maps for CEL evaluation)
 	resources := make(map[string]interface{})
-	for name, resource := range ec.Resources {
-		if resource != nil {
-			resources[name] = resource.Object
+	for name, val := range ec.Resources {
+		switch v := val.(type) {
+		case *unstructured.Unstructured:
+			if v != nil {
+				resources[name] = v.Object
+			}
+		case map[string]*unstructured.Unstructured:
+			nested := make(map[string]interface{})
+			for nestedName, nestedRes := range v {
+				if nestedRes != nil {
+					nested[nestedName] = nestedRes.Object
+				}
+			}
+			resources[name] = nested
 		}
 	}
 	result["resources"] = resources

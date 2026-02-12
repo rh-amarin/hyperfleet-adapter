@@ -14,6 +14,7 @@ import (
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/manifest"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transport_client"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/constants"
 	apperrors "github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/errors"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/version"
@@ -21,12 +22,12 @@ import (
 	"github.com/openshift-online/maestro/pkg/client/cloudevents/grpcsource"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	workv1client "open-cluster-management.io/api/client/work/clientset/versioned/typed/work/v1"
 	workv1 "open-cluster-management.io/api/work/v1"
 	"open-cluster-management.io/sdk-go/pkg/cloudevents/generic/options/cert"
-	"open-cluster-management.io/sdk-go/pkg/cloudevents/generic/options/grpc"
+	grpcopts "open-cluster-management.io/sdk-go/pkg/cloudevents/generic/options/grpc"
+	"sigs.k8s.io/yaml"
 )
 
 // Default configuration values
@@ -41,7 +42,7 @@ type Client struct {
 	maestroAPIClient *openapi.APIClient
 	config           *Config
 	log              logger.Logger
-	grpcOptions      *grpc.GRPCOptions
+	grpcOptions      *grpcopts.GRPCOptions
 }
 
 // Config holds configuration for creating a Maestro client
@@ -178,8 +179,8 @@ func NewMaestroClient(ctx context.Context, config *Config, log logger.Logger) (*
 	})
 
 	// Create gRPC options
-	grpcOptions := &grpc.GRPCOptions{
-		Dialer:                   &grpc.GRPCDialer{},
+	grpcOptions := &grpcopts.GRPCOptions{
+		Dialer:                   &grpcopts.GRPCDialer{},
 		ServerHealthinessTimeout: &serverHealthinessTimeout,
 	}
 	grpcOptions.Dialer.URL = config.GRPCServerAddr
@@ -261,7 +262,7 @@ func createHTTPTransport(config *Config) (*http.Transport, error) {
 }
 
 // configureTLS sets up TLS configuration for the gRPC connection
-func configureTLS(config *Config, grpcOptions *grpc.GRPCOptions) error {
+func configureTLS(config *Config, grpcOptions *grpcopts.GRPCOptions) error {
 	// Insecure mode: plaintext gRPC connection (no TLS)
 	// Note: Unlike HTTP where InsecureSkipVerify allows both http:// and https://,
 	// gRPC TLS always requires a TLS handshake on the server side.
@@ -406,16 +407,11 @@ func (c *Client) SourceID() string {
 }
 
 // TransportContext carries per-request routing information for the Maestro transport backend.
-// Pass this as the TransportContext (any) in ResourceToApply.Target or method parameters.
+// Pass this as the TransportContext (any) in ApplyResource or method parameters.
 type TransportContext struct {
 	// ConsumerName is the target cluster name (Maestro consumer).
 	// Required for all Maestro operations.
 	ConsumerName string
-
-	// ManifestWork is the ManifestWork template providing metadata (name, labels, annotations).
-	// The template's spec.workload.manifests will be replaced with the actual resources.
-	// Required for ApplyResources; ignored by GetResource/DiscoverResources.
-	ManifestWork *workv1.ManifestWork
 }
 
 // resolveTransportContext extracts the maestro TransportContext from the generic transport context.
@@ -438,25 +434,23 @@ func (c *Client) resolveTransportContext(target transport_client.TransportContex
 // Ensure Client implements transport_client.TransportClient
 var _ transport_client.TransportClient = (*Client)(nil)
 
-// ApplyResources applies multiple resources by bundling them into a ManifestWork.
-// All resources are stored in a single ManifestWork for the target cluster.
-// Requires a *maestro_client.TransportContext with ConsumerName and ManifestWork template.
-func (c *Client) ApplyResources(
+// ApplyResource applies a rendered ManifestWork (JSON/YAML bytes) to the target cluster.
+// It parses the bytes into a ManifestWork, then applies it via Maestro gRPC.
+// Requires a *maestro_client.TransportContext with ConsumerName.
+func (c *Client) ApplyResource(
 	ctx context.Context,
-	resources []transport_client.ResourceToApply,
-) (*transport_client.ApplyResourcesResult, error) {
-	result := &transport_client.ApplyResourcesResult{
-		Results: make([]*transport_client.ResourceApplyResult, 0, len(resources)),
+	manifestBytes []byte,
+	opts *transport_client.ApplyOptions,
+	target transport_client.TransportContext,
+) (*transport_client.ApplyResult, error) {
+	if len(manifestBytes) == 0 {
+		return nil, fmt.Errorf("manifest bytes cannot be empty")
 	}
 
-	if len(resources) == 0 {
-		return result, nil
-	}
-
-	// Resolve maestro transport context from first resource
-	transportCtx := c.resolveTransportContext(resources[0].Target)
+	// Resolve maestro transport context
+	transportCtx := c.resolveTransportContext(target)
 	if transportCtx == nil {
-		return nil, fmt.Errorf("maestro TransportContext is required: set ResourceToApply.Target to *maestro_client.TransportContext")
+		return nil, fmt.Errorf("maestro TransportContext is required: pass *maestro_client.TransportContext as target")
 	}
 
 	consumerName := transportCtx.ConsumerName
@@ -464,63 +458,29 @@ func (c *Client) ApplyResources(
 		return nil, fmt.Errorf("consumer name (target cluster) is required: set TransportContext.ConsumerName")
 	}
 
-	if transportCtx.ManifestWork == nil {
-		return nil, fmt.Errorf("ManifestWork template is required: set TransportContext.ManifestWork")
-	}
+	ctx = logger.WithMaestroConsumer(ctx, consumerName)
 
-	// Build ManifestWork from template and resources
-	work, err := c.buildManifestWork(transportCtx.ManifestWork, resources, consumerName)
+	// Parse bytes into ManifestWork
+	work, err := parseManifestWork(manifestBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build ManifestWork: %w", err)
+		return nil, fmt.Errorf("failed to parse ManifestWork: %w", err)
 	}
 
-	c.log.Infof(ctx, "Applying %d resources via ManifestWork %s/%s",
-		len(resources), consumerName, work.Name)
+	// Set namespace to consumer name
+	work.Namespace = consumerName
 
-	// Apply the ManifestWork (create or update)
-	appliedWork, err := c.ApplyManifestWork(ctx, consumerName, work)
+	c.log.Infof(ctx, "Applying ManifestWork %s/%s", consumerName, work.Name)
+
+	// Apply the ManifestWork (create or update with generation comparison)
+	result, err := c.ApplyManifestWork(ctx, consumerName, work)
 	if err != nil {
-		// Convert to result with error
-		for _, r := range resources {
-			resourceResult := &transport_client.ResourceApplyResult{
-				Name:  r.Name,
-				Error: err,
-			}
-			if r.Manifest != nil {
-				resourceResult.Kind = r.Manifest.GetKind()
-				resourceResult.Namespace = r.Manifest.GetNamespace()
-				resourceResult.ResourceName = r.Manifest.GetName()
-			}
-			result.Results = append(result.Results, resourceResult)
-			result.FailedCount++
-		}
-		return result, fmt.Errorf("failed to apply ManifestWork: %w", err)
+		return nil, fmt.Errorf("failed to apply ManifestWork: %w", err)
 	}
 
-	// Determine operation based on ManifestWork result
-	op := c.determineOperation(appliedWork)
-
-	// Build success results for all resources
-	for _, r := range resources {
-		resourceResult := &transport_client.ResourceApplyResult{
-			Name: r.Name,
-			ApplyResult: &transport_client.ApplyResult{
-				Resource:  r.Manifest,
-				Operation: op,
-				Reason:    fmt.Sprintf("applied via ManifestWork %s/%s", consumerName, work.Name),
-			},
-		}
-		if r.Manifest != nil {
-			resourceResult.Kind = r.Manifest.GetKind()
-			resourceResult.Namespace = r.Manifest.GetNamespace()
-			resourceResult.ResourceName = r.Manifest.GetName()
-		}
-		result.Results = append(result.Results, resourceResult)
-		result.SuccessCount++
-	}
-
-	c.log.Infof(ctx, "Successfully applied %d resources via ManifestWork", result.SuccessCount)
-	return result, nil
+	return &transport_client.ApplyResult{
+		Operation: result.Operation,
+		Reason:    result.Reason,
+	}, nil
 }
 
 // GetResource retrieves a resource by searching all ManifestWorks for the target consumer.
@@ -540,7 +500,18 @@ func (c *Client) GetResource(
 		return nil, apierrors.NewNotFound(gr, name)
 	}
 
-	// List all ManifestWorks for this consumer and search across them
+	ctx = logger.WithMaestroConsumer(ctx, consumerName)
+
+	// If the GVK is ManifestWork, get the ManifestWork object directly
+	if gvk.Kind == constants.ManifestWorkKind && gvk.Group == constants.ManifestWorkGroup {
+		work, err := c.GetManifestWork(ctx, consumerName, name)
+		if err != nil {
+			return nil, err
+		}
+		return workToUnstructured(work)
+	}
+
+	// Otherwise, list all ManifestWorks and search within their workloads
 	workList, err := c.ListManifestWorks(ctx, consumerName, "")
 	if err != nil {
 		return nil, err
@@ -567,6 +538,8 @@ func (c *Client) GetResource(
 }
 
 // DiscoverResources discovers resources by searching all ManifestWorks for the target consumer.
+// If the GVK is ManifestWork, it matches against the ManifestWork objects themselves.
+// Otherwise, it searches within the workloads of each ManifestWork.
 func (c *Client) DiscoverResources(
 	ctx context.Context,
 	gvk schema.GroupVersionKind,
@@ -582,15 +555,37 @@ func (c *Client) DiscoverResources(
 		return &unstructured.UnstructuredList{}, nil
 	}
 
-	// List all ManifestWorks for this consumer and search across them
+	ctx = logger.WithMaestroConsumer(ctx, consumerName)
+
+	// List all ManifestWorks for this consumer
 	workList, err := c.ListManifestWorks(ctx, consumerName, "")
 	if err != nil {
 		return nil, err
 	}
 
 	allItems := &unstructured.UnstructuredList{}
+
+	// If discovering ManifestWork objects themselves, match against the top-level objects
+	if gvk.Kind == constants.ManifestWorkKind && gvk.Group == constants.ManifestWorkGroup {
+		for i := range workList.Items {
+			workUnstructured, err := workToUnstructured(&workList.Items[i])
+			if err != nil {
+				continue
+			}
+			if manifest.MatchesDiscoveryCriteria(workUnstructured, discovery) {
+				allItems.Items = append(allItems.Items, *workUnstructured)
+			}
+		}
+		return allItems, nil
+	}
+
+	// Otherwise, search within each ManifestWork's workload
 	for i := range workList.Items {
-		list, err := c.DiscoverManifestInWork(&workList.Items[i], discovery)
+		workUnstructured, err := workToUnstructured(&workList.Items[i])
+		if err != nil {
+			continue
+		}
+		list, err := c.DiscoverManifestInWork(workUnstructured, discovery)
 		if err != nil {
 			continue
 		}
@@ -600,48 +595,29 @@ func (c *Client) DiscoverResources(
 	return allItems, nil
 }
 
-// buildManifestWork creates a ManifestWork from the template, populating spec.workload.manifests
-// with the actual resources. The template provides metadata (name, labels, annotations).
-// The namespace is set to the consumer name (target cluster).
-func (c *Client) buildManifestWork(template *workv1.ManifestWork, resources []transport_client.ResourceToApply, consumerName string) (*workv1.ManifestWork, error) {
-	// DeepCopy the template so we don't mutate the original
-	work := template.DeepCopy()
-	work.Namespace = consumerName
+// parseManifestWork parses JSON or YAML bytes into a ManifestWork object.
+func parseManifestWork(data []byte) (*workv1.ManifestWork, error) {
+	work := &workv1.ManifestWork{}
 
-	// Convert each resource to a Manifest
-	manifests := make([]workv1.Manifest, 0, len(resources))
-	for _, r := range resources {
-		if r.Manifest == nil {
-			continue // Skip resources with no manifest. It means manifests already defined in the manifestWork template
-		}
-		raw, err := json.Marshal(r.Manifest.Object)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal manifest %s: %w", r.Name, err)
-		}
-		manifests = append(manifests, workv1.Manifest{
-			RawExtension: runtime.RawExtension{Raw: raw},
-		})
+	// Try JSON first
+	if err := json.Unmarshal(data, work); err == nil && work.Name != "" {
+		return work, nil
 	}
 
-	// Replace the template's manifests with actual resources (only if there are any)
-	if len(manifests) > 0 {
-		work.Spec.Workload.Manifests = manifests
+	// Fall back to YAML
+	jsonData, err := yaml.YAMLToJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert YAML to JSON: %w", err)
 	}
-	// Otherwise, use the template's inline manifests as-is
+
+	if err := json.Unmarshal(jsonData, work); err != nil {
+		return nil, fmt.Errorf("failed to parse ManifestWork: %w", err)
+	}
 
 	return work, nil
 }
 
 // determineOperation determines the operation that was performed based on the ManifestWork.
-func (c *Client) determineOperation(work *workv1.ManifestWork) manifest.Operation {
-	if work == nil {
-		return manifest.OperationCreate
-	}
-	if work.ResourceVersion == "" {
-		return manifest.OperationCreate
-	}
-	return manifest.OperationUpdate
-}
 
 // manifestToUnstructured converts a workv1.Manifest to an unstructured object.
 func manifestToUnstructured(m workv1.Manifest) (*unstructured.Unstructured, error) {

@@ -385,32 +385,45 @@ func MatchesLabels(obj *unstructured.Unstructured, labelSelector string) bool {
 	return true
 }
 
-// DiscoverInManifestWork finds manifests within a ManifestWork that match the discovery criteria.
-// This is used by maestro_client to find specific manifests within a ManifestWork's workload.
+// DiscoverNestedManifest finds manifests within a parent resource (e.g., ManifestWork) that match
+// the discovery criteria. The parent is expected to contain nested manifests at
+// spec.workload.manifests (OCM ManifestWork structure).
 //
 // Parameters:
-//   - work: The ManifestWork containing manifests to search
+//   - parent: The parent unstructured resource containing nested manifests
 //   - discovery: Discovery configuration (namespace, name, or label selector)
 //
 // Returns:
 //   - List of matching manifests as unstructured objects
 //   - The manifest with the highest generation if multiple match
-func DiscoverInManifestWork(work *workv1.ManifestWork, discovery Discovery) (*unstructured.UnstructuredList, error) {
+func DiscoverNestedManifest(parent *unstructured.Unstructured, discovery Discovery) (*unstructured.UnstructuredList, error) {
 	list := &unstructured.UnstructuredList{}
 
-	if work == nil || discovery == nil {
+	if parent == nil || discovery == nil {
 		return list, nil
 	}
 
-	for i, m := range work.Spec.Workload.Manifests {
-		obj := &unstructured.Unstructured{}
-		if err := obj.UnmarshalJSON(m.Raw); err != nil {
-			return nil, apperrors.Validation("ManifestWork %q manifest[%d]: failed to unmarshal: %v",
-				work.Name, i, err)
+	// Extract spec.workload.manifests from the unstructured parent
+	manifests, found, err := unstructured.NestedSlice(parent.Object, "spec", "workload", "manifests")
+	if err != nil {
+		return nil, apperrors.Validation("failed to extract spec.workload.manifests from %q: %v",
+			parent.GetName(), err)
+	}
+	if !found {
+		return list, nil
+	}
+
+	for i, m := range manifests {
+		manifestMap, ok := m.(map[string]interface{})
+		if !ok {
+			return nil, apperrors.Validation("%q manifest[%d]: unexpected type %T",
+				parent.GetName(), i, m)
 		}
 
+		obj := &unstructured.Unstructured{Object: manifestMap}
+
 		// Check if manifest matches discovery criteria
-		if matchesDiscovery(obj, discovery) {
+		if MatchesDiscoveryCriteria(obj, discovery) {
 			list.Items = append(list.Items, *obj)
 		}
 	}
@@ -418,8 +431,8 @@ func DiscoverInManifestWork(work *workv1.ManifestWork, discovery Discovery) (*un
 	return list, nil
 }
 
-// matchesDiscovery checks if a manifest matches the discovery criteria
-func matchesDiscovery(obj *unstructured.Unstructured, discovery Discovery) bool {
+// MatchesDiscoveryCriteria checks if a resource matches the discovery criteria (namespace, name, or labels).
+func MatchesDiscoveryCriteria(obj *unstructured.Unstructured, discovery Discovery) bool {
 	// Check namespace if specified
 	if ns := discovery.GetNamespace(); ns != "" && obj.GetNamespace() != ns {
 		return false

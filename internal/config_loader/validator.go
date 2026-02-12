@@ -125,18 +125,6 @@ func (v *TaskConfigValidator) ValidateFileReferences() error {
 		}
 	}
 
-	// Validate transport.maestro.manifestWork.ref in spec.resources
-	for i, resource := range v.config.Spec.Resources {
-		ref := resource.GetManifestWorkRef()
-		if ref != "" {
-			path := fmt.Sprintf("%s.%s[%d].%s.%s.%s.%s",
-				FieldSpec, FieldResources, i, FieldTransport, FieldMaestro, FieldManifestWork, FieldRef)
-			if err := v.validateFileExists(ref, path); err != nil {
-				errors = append(errors, err.Error())
-			}
-		}
-	}
-
 	if len(errors) > 0 {
 		return fmt.Errorf("file reference errors:\n  - %s", strings.Join(errors, "\n  - "))
 	}
@@ -318,10 +306,10 @@ func (v *TaskConfigValidator) validateTransportConfig() {
 						maestroPath+"."+FieldTargetCluster)
 				}
 
-				// Validate manifestWork is set (either inline or ref)
-				if resource.Transport.Maestro.ManifestWork == nil && resource.Manifest == nil {
-					v.errors.Add(maestroPath+"."+FieldManifestWork,
-						"either manifestWork or manifest must be set for maestro transport")
+				// Validate manifest is set for maestro transport
+				if resource.Manifest == nil {
+					v.errors.Add(basePath+"."+FieldManifest,
+						"manifest is required for maestro transport")
 				}
 			}
 		}
@@ -396,10 +384,9 @@ func (v *TaskConfigValidator) validateTemplateVariables() {
 		if manifest, ok := resource.Manifest.(map[string]interface{}); ok {
 			v.validateTemplateMap(manifest, resourcePath+"."+FieldManifest)
 		}
-		// NOTE: We intentionally skip template variable validation for manifestWork content.
-		// ManifestWork templates (both inline and ref) may use variables that are provided
-		// at runtime by the framework (e.g., adapterName, timestamp) and are not necessarily
-		// declared in the task config's params or precondition captures.
+		// NOTE: For maestro transport, we skip template variable validation for manifest content.
+		// ManifestWork templates may use variables provided at runtime by the framework
+		// (e.g., adapterName, timestamp) that are not necessarily declared in params or captures.
 		if resource.Discovery != nil {
 			discoveryPath := resourcePath + "." + FieldDiscovery
 			v.validateTemplateString(resource.Discovery.Namespace, discoveryPath+"."+FieldNamespace)
@@ -408,6 +395,20 @@ func (v *TaskConfigValidator) validateTemplateVariables() {
 				for k, val := range resource.Discovery.BySelectors.LabelSelector {
 					v.validateTemplateString(val,
 						fmt.Sprintf("%s.%s.%s[%s]", discoveryPath, FieldBySelectors, FieldLabelSelector, k))
+				}
+			}
+		}
+		// Validate nestedDiscoveries template variables
+		for j, md := range resource.NestedDiscoveries {
+			mdPath := fmt.Sprintf("%s.%s[%d].%s", resourcePath, FieldNestedDiscoveries, j, FieldDiscovery)
+			if md.Discovery != nil {
+				v.validateTemplateString(md.Discovery.Namespace, mdPath+"."+FieldNamespace)
+				v.validateTemplateString(md.Discovery.ByName, mdPath+"."+FieldByName)
+				if md.Discovery.BySelectors != nil {
+					for k, val := range md.Discovery.BySelectors.LabelSelector {
+						v.validateTemplateString(val,
+							fmt.Sprintf("%s.%s.%s[%s]", mdPath, FieldBySelectors, FieldLabelSelector, k))
+					}
 				}
 			}
 		}
@@ -558,8 +559,12 @@ func (v *TaskConfigValidator) validateBuildExpressions(m map[string]interface{},
 
 func (v *TaskConfigValidator) validateK8sManifests() {
 	for i, resource := range v.config.Spec.Resources {
-		// Skip manifest validation for maestro transport resources without a manifest field
-		if resource.IsMaestroTransport() && resource.Manifest == nil {
+		// Skip K8s manifest validation for maestro transport — manifest holds ManifestWork content
+		if resource.IsMaestroTransport() {
+			continue
+		}
+
+		if resource.Manifest == nil {
 			continue
 		}
 
