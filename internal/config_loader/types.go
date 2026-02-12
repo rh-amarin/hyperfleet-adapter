@@ -48,7 +48,7 @@ func (c *Config) GetMetadata() Metadata {
 }
 
 // Merge combines AdapterConfig (deployment) and AdapterTaskConfig (task) into a unified Config.
-// The metadata is taken from the task config since it contains the adapter task name.
+// The metadata is taken from the adapter config since it takes precedence.
 // The adapter info and clients come from the deployment config.
 // The params, preconditions, resources, and post-processing come from the task config.
 func Merge(adapterCfg *AdapterConfig, taskCfg *AdapterTaskConfig) *Config {
@@ -59,7 +59,7 @@ func Merge(adapterCfg *AdapterConfig, taskCfg *AdapterTaskConfig) *Config {
 	return &Config{
 		APIVersion: adapterCfg.APIVersion,
 		Kind:       ExpectedKindConfig,
-		Metadata:   taskCfg.Metadata, // Use task metadata for adapter name
+		Metadata:   adapterCfg.Metadata, // Adapter config takes precedence
 		Spec: ConfigSpec{
 			// From deployment config
 			Adapter:     adapterCfg.Spec.Adapter,

@@ -94,8 +94,8 @@ spec:
 	// Verify merged config fields
 	assert.Equal(t, "hyperfleet.redhat.com/v1alpha1", config.APIVersion)
 	assert.Equal(t, "Config", config.Kind)
-	// Metadata comes from task config
-	assert.Equal(t, "test-adapter", config.Metadata.Name)
+	// Metadata comes from adapter config (takes precedence)
+	assert.Equal(t, "deployment-config", config.Metadata.Name)
 	// Adapter info comes from adapter config
 	assert.Equal(t, "0.1.0", config.Spec.Adapter.Version)
 	// Clients config comes from adapter config
@@ -620,8 +620,8 @@ func TestMergeConfigs(t *testing.T) {
 	// Verify merged config
 	assert.Equal(t, "hyperfleet.redhat.com/v1alpha1", merged.APIVersion)
 	assert.Equal(t, "Config", merged.Kind)
-	// Metadata comes from task config
-	assert.Equal(t, "task-processor", merged.Metadata.Name)
+	// Metadata comes from adapter config
+	assert.Equal(t, "adapter-deployment", merged.Metadata.Name)
 	// Adapter info from adapter config
 	assert.Equal(t, "1.0.0", merged.Spec.Adapter.Version)
 	// Clients from adapter config
