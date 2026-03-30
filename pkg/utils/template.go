@@ -9,51 +9,34 @@ import (
 	"text/template"
 	"time"
 
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
+	"github.com/Masterminds/sprig/v3"
 )
 
 // TemplateFuncs provides helper functions for Go templates.
 // These functions are available within {{ }} template expressions.
-var TemplateFuncs = template.FuncMap{
-	// Time functions
-	"now": time.Now,
-	"date": func(layout string, t time.Time) string {
+// This includes all Sprig functions plus custom adapter-specific functions.
+var TemplateFuncs = buildTemplateFuncs()
+
+// buildTemplateFuncs creates the full set of template functions
+// by combining Sprig functions with custom adapter functions
+func buildTemplateFuncs() template.FuncMap {
+	// Start with all Sprig functions
+	funcs := sprig.TxtFuncMap()
+
+	// Add custom time functions that work with our date format
+	funcs["now"] = time.Now
+	funcs["date"] = func(layout string, t time.Time) string {
 		return t.Format(layout)
-	},
-	"dateFormat": func(layout string, t time.Time) string {
+	}
+	funcs["dateFormat"] = func(layout string, t time.Time) string {
 		return t.Format(layout)
-	},
+	}
 
-	// String functions
-	"lower": strings.ToLower,
-	"upper": strings.ToUpper,
-	"title": func(s string) string {
-		return cases.Title(language.English).String(s)
-	},
-	"trim":       strings.TrimSpace,
-	"trimPrefix": strings.TrimPrefix,
-	"trimSuffix": strings.TrimSuffix,
-	"replace":    strings.ReplaceAll,
-	"contains":   strings.Contains,
-	"hasPrefix":  strings.HasPrefix,
-	"hasSuffix":  strings.HasSuffix,
+	// Add convenience wrapper for trimSpace (Sprig's trim requires cutset parameter)
+	funcs["trimSpace"] = strings.TrimSpace
 
-	// Quote function
-	"quote": func(s string) string {
-		return fmt.Sprintf("%q", s)
-	},
-
-	// Default value function - returns defaultVal if val is nil or empty
-	"default": func(defaultVal, val interface{}) interface{} {
-		if val == nil || val == "" {
-			return defaultVal
-		}
-		return val
-	},
-
-	// Type conversion functions
-	"int": func(v interface{}) int {
+	// Add custom type conversion functions with fallback behavior
+	funcs["toInt"] = func(v interface{}) int {
 		switch val := v.(type) {
 		case int:
 			return val
@@ -67,8 +50,8 @@ var TemplateFuncs = template.FuncMap{
 		default:
 			return 0
 		}
-	},
-	"int64": func(v interface{}) int64 {
+	}
+	funcs["toInt64"] = func(v interface{}) int64 {
 		switch val := v.(type) {
 		case int:
 			return int64(val)
@@ -82,8 +65,8 @@ var TemplateFuncs = template.FuncMap{
 		default:
 			return 0
 		}
-	},
-	"float": func(v interface{}) float64 {
+	}
+	funcs["toFloat"] = func(v interface{}) float64 {
 		switch val := v.(type) {
 		case int:
 			return float64(val)
@@ -97,8 +80,8 @@ var TemplateFuncs = template.FuncMap{
 		default:
 			return 0
 		}
-	},
-	"float64": func(v interface{}) float64 {
+	}
+	funcs["toFloat64"] = func(v interface{}) float64 {
 		switch val := v.(type) {
 		case int:
 			return float64(val)
@@ -112,10 +95,12 @@ var TemplateFuncs = template.FuncMap{
 		default:
 			return 0
 		}
-	},
-	"string": func(v interface{}) string {
+	}
+	funcs["toString"] = func(v interface{}) string {
 		return fmt.Sprintf("%v", v)
-	},
+	}
+
+	return funcs
 }
 
 // RenderTemplate renders a Go template string with the given data.

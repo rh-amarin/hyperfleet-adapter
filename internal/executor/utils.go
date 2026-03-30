@@ -1,15 +1,12 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"net/url"
 	"path"
-	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/configloader"
@@ -17,8 +14,7 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleetapi"
 	apierrors "github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/errors"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/utils"
 )
 
 // ToConditionDefs converts configloader.Condition slice to criteria.ConditionDef slice.
@@ -346,116 +342,19 @@ func ValidateAPIResponse(resp *hyperfleetapi.Response, err error, method, url st
 }
 
 // renderTemplate renders a Go template string with the given data
-// templateFuncs provides common functions for Go templates
-var templateFuncs = template.FuncMap{
-	// Time functions
-	"now": time.Now,
-	"date": func(layout string, t time.Time) string {
-		return t.Format(layout)
-	},
-	"dateFormat": func(layout string, t time.Time) string {
-		return t.Format(layout)
-	},
-	// String functions
-	"lower": strings.ToLower,
-	"upper": strings.ToUpper,
-	"title": func(s string) string {
-		return cases.Title(language.English).String(s)
-	},
-	"trim":      strings.TrimSpace,
-	"replace":   strings.ReplaceAll,
-	"contains":  strings.Contains,
-	"hasPrefix": strings.HasPrefix,
-	"hasSuffix": strings.HasSuffix,
-	// Default value function
-	"default": func(defaultVal, val interface{}) interface{} {
-		if val == nil || val == "" {
-			return defaultVal
-		}
-		return val
-	},
-	// Quote function
-	"quote": func(s string) string {
-		return fmt.Sprintf("%q", s)
-	},
-	// Type conversion functions
-	"int": func(v interface{}) int {
-		switch val := v.(type) {
-		case int:
-			return val
-		case int64:
-			return int(val)
-		case float64:
-			return int(val)
-		case string:
-			i, _ := strconv.Atoi(val) //nolint:errcheck // returns 0 on error, which is acceptable
-			return i
-		default:
-			return 0
-		}
-	},
-	"int64": func(v interface{}) int64 {
-		switch val := v.(type) {
-		case int:
-			return int64(val)
-		case int64:
-			return val
-		case float64:
-			return int64(val)
-		case string:
-			i, _ := strconv.ParseInt(val, 10, 64) //nolint:errcheck // returns 0 on error, which is acceptable
-			return i
-		default:
-			return 0
-		}
-	},
-	"float64": func(v interface{}) float64 {
-		switch val := v.(type) {
-		case int:
-			return float64(val)
-		case int64:
-			return float64(val)
-		case float64:
-			return val
-		case string:
-			f, _ := strconv.ParseFloat(val, 64) //nolint:errcheck // returns 0 on error, which is acceptable
-			return f
-		default:
-			return 0
-		}
-	},
-	"string": func(v interface{}) string {
-		return fmt.Sprintf("%v", v)
-	},
-}
+// Uses the centralized template functions from pkg/utils which includes Sprig functions
 
 // This is a shared utility used across preconditions, resources, and post-actions
 func renderTemplate(templateStr string, data map[string]interface{}) (string, error) {
-	// If no template delimiters, return as-is
-	if !strings.Contains(templateStr, "{{") {
-		return templateStr, nil
-	}
-
-	tmpl, err := template.New("template").Funcs(templateFuncs).Option("missingkey=error").Parse(templateStr)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return buf.String(), nil
+	// Delegate to the centralized template rendering function in pkg/utils
+	// This ensures all template rendering uses the same functions (including Sprig)
+	return utils.RenderTemplate(templateStr, data)
 }
 
 // renderTemplateBytes renders a Go template string and returns bytes
 func renderTemplateBytes(templateStr string, data map[string]interface{}) ([]byte, error) {
-	result, err := renderTemplate(templateStr, data)
-	if err != nil {
-		return nil, err
-	}
-	return []byte(result), nil
+	// Delegate to the centralized template rendering function in pkg/utils
+	return utils.RenderTemplateBytes(templateStr, data)
 }
 
 // executionErrorToMap converts an ExecutionError struct to a map for CEL evaluation
