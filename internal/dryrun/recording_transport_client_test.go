@@ -336,6 +336,99 @@ func TestDiscoverResources_EmptyStore(t *testing.T) {
 	assert.Empty(t, list.Items)
 }
 
+// maestroTarget is a non-nil transport context value that represents a Maestro call.
+// The concrete type doesn't matter here — only nil vs non-nil is tested.
+var maestroTarget transportclient.TransportContext = struct{ ConsumerName string }{"cluster-1"}
+
+func TestDeleteResource_Kubernetes_RemovesFromStore(t *testing.T) {
+	ctx := context.Background()
+	client := NewDryrunTransportClient()
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	_, err := client.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "my-cm"), nil, nil)
+	require.NoError(t, err)
+
+	// K8s delete: nil target → synchronous, resource must be gone immediately.
+	err = client.DeleteResource(ctx, gvk, "default", "my-cm", nil, nil)
+	require.NoError(t, err)
+
+	disc := &testDiscovery{namespace: "default", name: "my-cm", singleResource: true}
+	list, err := client.DiscoverResources(ctx, gvk, disc, nil)
+	require.NoError(t, err)
+	assert.Empty(t, list.Items, "K8s resource must be removed from store immediately after delete")
+
+	// Delete record must be appended (1 apply + 1 delete + 1 discover).
+	deleteFound := false
+	for _, r := range client.Records {
+		if r.Operation == operationDelete {
+			deleteFound = true
+			assert.Equal(t, "my-cm", r.Name)
+		}
+	}
+	assert.True(t, deleteFound)
+}
+
+func TestDeleteResource_Maestro_SetsDeleteTimestampAndKeepsInStore(t *testing.T) {
+	ctx := context.Background()
+	client := NewDryrunTransportClient()
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	_, err := client.ApplyResource(ctx, makeManifest("v1", "ConfigMap", "default", "my-cm"), nil, nil)
+	require.NoError(t, err)
+
+	// Maestro delete: non-nil target → async, resource must stay with deletionTimestamp.
+	err = client.DeleteResource(ctx, gvk, "default", "my-cm", nil, maestroTarget)
+	require.NoError(t, err)
+
+	disc := &testDiscovery{namespace: "default", name: "my-cm", singleResource: true}
+	list, err := client.DiscoverResources(ctx, gvk, disc, nil)
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1, "Maestro resource must remain in store after delete (async cleanup)")
+
+	ts := list.Items[0].GetDeletionTimestamp()
+	assert.NotNil(t, ts, "deletionTimestamp must be set for Maestro async delete")
+	assert.False(t, ts.IsZero())
+}
+
+func TestDeleteResource_NonExistentResource_NoOp(t *testing.T) {
+	ctx := context.Background()
+	client := NewDryrunTransportClient()
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Deleting a resource that was never applied must not panic.
+	err := client.DeleteResource(ctx, gvk, "default", "ghost", nil, nil)
+	require.NoError(t, err)
+
+	require.Len(t, client.Records, 1)
+	assert.Equal(t, operationDelete, client.Records[0].Operation)
+}
+
+func TestDeleteResource_WithOverrides_Maestro_SetsDeleteTimestamp(t *testing.T) {
+	ctx := context.Background()
+	overrides := DiscoveryOverrides{
+		"my-cm": {
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]interface{}{
+				"name":      "my-cm",
+				"namespace": "default",
+			},
+		},
+	}
+	client := NewDryrunTransportClientWithOverrides(overrides)
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Maestro delete on a pre-loaded override resource.
+	err := client.DeleteResource(ctx, gvk, "default", "my-cm", nil, maestroTarget)
+	require.NoError(t, err)
+
+	disc := &testDiscovery{namespace: "default", name: "my-cm", singleResource: true}
+	list, err := client.DiscoverResources(ctx, gvk, disc, nil)
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1)
+	assert.NotNil(t, list.Items[0].GetDeletionTimestamp())
+}
+
 func TestConcurrentApplyAndGet(t *testing.T) {
 	ctx := context.Background()
 	client := NewDryrunTransportClient()

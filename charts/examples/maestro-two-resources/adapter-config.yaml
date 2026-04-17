@@ -1,0 +1,56 @@
+# Example HyperFleet Adapter deployment configuration
+adapter:
+  name: maestro-two-resources-example
+  version: "0.2.0"
+
+# Log the full merged configuration after load (default: false)
+debug_config: true
+log:
+  level: debug
+
+clients:
+  hyperfleet_api:
+    base_url: http://hyperfleet-api:8000
+    version: v1
+    timeout: 2s
+    retry_attempts: 3
+    retry_backoff: exponential
+
+  broker:
+    subscription_id: CHANGE_ME
+    topic: CHANGE_ME
+
+  maestro:
+    grpc_server_address: "maestro-grpc.maestro.svc.cluster.local:8090"
+
+    # HTTPS server address for REST API operations (optional)
+    # Environment variable: HYPERFLEET_MAESTRO_HTTP_SERVER_ADDRESS
+    http_server_address: "http://maestro.maestro.svc.cluster.local:8000"
+
+    # Source identifier for CloudEvents routing (must be unique across adapters)
+    # Environment variable: HYPERFLEET_MAESTRO_SOURCE_ID
+    source_id: "hyperfleet-adapter"
+
+    # Client identifier (defaults to source_id if not specified)
+    # Environment variable: HYPERFLEET_MAESTRO_CLIENT_ID
+    client_id: "hyperfleet-adapter-client"
+    insecure: true
+
+    # HTTP timeout (default: 10s)
+    # Environment variable: HYPERFLEET_MAESTRO_TIMEOUT
+    timeout: "30s"
+
+    # gRPC server healthiness check timeout (default: 20s)
+    # Environment variable: HYPERFLEET_MAESTRO_SERVER_HEALTHINESS_TIMEOUT
+    server_healthiness_timeout: "20s"
+
+    # Authentication configuration
+    #auth:
+    #  type: "tls"  # TLS certificate-based mTLS
+    #
+    #  tls_config:
+    #    ca_file: "/etc/maestro/certs/grpc/ca.crt"
+    #    cert_file: "/etc/maestro/certs/grpc/client.crt"
+    #    key_file: "/etc/maestro/certs/grpc/client.key"
+    #    server_name: "maestro-grpc.maestro.svc.cluster.local"
+    #    http_ca_file: "/etc/maestro/certs/https/ca.crt"

@@ -195,7 +195,9 @@ func (pae *PostActionExecutor) processValue(
 			}
 			// If value is nil (field not found or empty), use default
 			if result.Value == nil {
-				if valueDef.Default != nil {
+				if result.Error != nil && valueDef.Default == nil {
+					pae.log.Warnf(ctx, "Field '%s' not found in payload: %v", result.Source, result.Error)
+				} else if valueDef.Default != nil {
 					pae.log.Debugf(ctx, "Using default value for '%s': %v", result.Source, valueDef.Default)
 				}
 				return valueDef.Default, nil

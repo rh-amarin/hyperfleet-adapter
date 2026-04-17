@@ -147,7 +147,7 @@ flowchart TD
     PRECOND -->|conditions not met| SKIP[Set adapter.resourcesSkipped=true]
     SKIP --> POST
     PRECOND -->|conditions met| RESOURCES[Phase 3: Apply Resources]
-    RESOURCES -->|resource fails| FAIL_RES[Set adapter.executionError]
+    RESOURCES -->|resource fails| FAIL_RES[Set adapter.executionError + resourceErrors]
     FAIL_RES --> POST
     RESOURCES -->|success| POST
     POST[Phase 4: Build Payload & Report Status]
@@ -161,9 +161,13 @@ The `adapter.*` context is populated automatically and available in your post-ac
 | `adapter.executionStatus` | string | `"success"` or `"failed"` |
 | `adapter.resourcesSkipped` | bool | `true` if preconditions were not met |
 | `adapter.skipReason` | string | Why resources were skipped |
-| `adapter.executionError.phase` | string | Phase where error occurred |
-| `adapter.executionError.step` | string | Specific step that failed |
-| `adapter.executionError.message` | string | Error details |
+| `adapter.executionError.phase` | string | Phase where the first error occurred |
+| `adapter.executionError.step` | string | Specific step that first failed |
+| `adapter.executionError.message` | string | First error details |
+| `adapter.resourceErrors` | map | Per-resource errors from the resources phase (keyed by resource name) |
+| `adapter.resourceErrors.<name>.phase` | string | Phase for that resource's error |
+| `adapter.resourceErrors.<name>.step` | string | Resource name that failed |
+| `adapter.resourceErrors.<name>.message` | string | Error details for that resource |
 
 ---
 
@@ -505,6 +509,7 @@ The framework determines the operation automatically:
 | `update` | Resource exists, generation changed | Patch the resource |
 | `skip` | Resource exists, generation unchanged | No-op (idempotent) |
 | `recreate` | `recreate_on_change: true` is set | Delete then create |
+| `delete` | `lifecycle.delete.when` expression evaluates to `true` | Delete the resource; remaining resources still processed |
 
 ### Discovery
 
@@ -638,9 +643,240 @@ Nested discoveries are **promoted to top-level keys** in the `resources` map. Ac
 
 Beside this shortcut, the nested Discovery also allows accessing status data from the resource such as statusFeedback and conditions.
 
+**statusFeedback** — Maestro populates `statusFeedback.values` when `feedbackRules` are configured on the ManifestWork. Use it to read individual field values from the sub-resource without traversing the full ManifestWork tree:
+
+```yaml
+# Available when the namespace phase (reported via feedbackRules) is Active
+status:
+  expression: |
+    resources.?namespace0.?statusFeedback.?values.orValue([])
+      .filter(v, v.name == "phase").size() > 0
+    ? resources.namespace0.statusFeedback.values
+        .filter(v, v.name == "phase")[0].fieldValue.string == "Active"
+      ? "True" : "False"
+    : "Unknown"
+```
+
+**conditions** — If the sub-resource reports a standard Kubernetes `conditions` array (e.g., a CRD managed by an operator on the spoke cluster), access it the same way you would on a directly discovered resource:
+
+```yaml
+# Available when the nested resource reports Ready=True
+status:
+  expression: |
+    resources.?namespace0.?status.?conditions.orValue([])
+      .exists(c, c.type == "Ready" && c.status == "True")
+    ? "True" : "False"
+```
+
+### Conditional deletion (lifecycle.delete)
+
+Resources can be conditionally deleted using the `lifecycle.delete` block. This enables the adapter to clean up managed resources when a deletion event occurs, with CEL expressions controlling deletion order between dependent resources.
+
+#### Configuration
+
+```yaml
+resources:
+  - name: "clusterNamespace"
+    transport:
+      client: "kubernetes"
+    manifest:
+      # ...
+    discovery:                    # required: needed to locate the resource for deletion
+      by_name: "{{ .clusterId }}"
+    lifecycle:
+      delete:
+        propagationPolicy: Background   # optional: Background (default), Foreground, Orphan
+        when:
+          expression: "is_deleting"     # required: CEL expression evaluated each reconciliation
+```
+
+**Requirements:**
+
+- `discovery` must be configured on the same resource — without it the executor cannot locate the resource to delete.
+- `when.expression` is required — the resource is deleted only when the expression evaluates to `true`.
+
+#### The is_deleting pattern
+
+The standard way to detect pending deletion is to derive a boolean from the precondition response using the named-map-variable approach. The precondition name (e.g. `getCluster`) is automatically injected as a map variable in the capture CEL context, enabling safe optional-field access:
+
+```yaml
+preconditions:
+  - name: "getCluster"
+    api_call:
+      url: "/api/hyperfleet/v1/clusters/{{ .clusterId }}"
+    capture:
+      - name: "is_deleting"
+        expression: "has(getCluster.deleted_time)"
+```
+
+Then reference `is_deleting` in `lifecycle.delete.when.expression`.
+
+> **Why not `field: deleted_time`?** Capturing `deleted_time` as a `field:` capture without a default logs a `WARN` on every reconciliation where the field is absent — which is ~99% of the time when the cluster is not being deleted. The `has()` expression approach reads the field directly from the named response map and returns `false` cleanly when absent, with no log noise.
+
+#### Dependency ordering
+
+When multiple resources must be deleted in a specific order, use `resources.?X.hasValue()` to check whether a dependency has been confirmed gone:
+
+```yaml
+resources:
+  - name: "configMapResource"
+    # ...
+    lifecycle:
+      delete:
+        when:
+          expression: "is_deleting"
+
+  - name: "namespaceResource"
+    # ...
+    lifecycle:
+      delete:
+        when:
+          # Delete namespace only once configMapResource is confirmed gone
+          expression: "is_deleting && !resources.?configMapResource.hasValue()"
+```
+
+How this works across reconciliation cycles:
+
+```text
+Reconciliation 1 (is_deleting=true):
+  → Delete configMapResource                  ✓ (condition met)
+  → Skip namespaceResource deletion           ✗ (configMapResource still present)
+
+Reconciliation 2 (configMapResource gone):
+  → configMapResource absent in context       -
+  → Delete namespaceResource                  ✓ (condition met)
+```
+
+> **Note**: Use `!resources.?X.hasValue()` to check resource absence. Do not use `has()` (returns `true` even for nil-valued keys) or `== null` (fails if the key was never added due to a mid-loop executor failure).
+
+#### Post-delete context
+
+After deleting a resource, the executor rediscovers it to determine its actual state and updates `resources.X` accordingly:
+
+| Post-delete state | `resources.X` | Effect on dependents |
+|---|---|---|
+| Resource confirmed gone (NotFound) | absent from context | Dependents can cascade in the same reconciliation |
+| Resource still present (finalizers or Maestro async) | existing object | Dependents wait for the next reconciliation |
+
+This means same-reconciliation cascading works for Kubernetes resources without finalizers. Resources with finalizers or Maestro ManifestWorks defer to the next reconciliation.
+
+#### propagationPolicy
+
+Controls how Kubernetes removes dependent objects. Ignored for Maestro transport.
+
+| Value | Behavior |
+|---|---|
+| `Background` (default) | Kubernetes GC runs asynchronously after the resource is deleted |
+| `Foreground` | API call blocks until all dependents are gone before removing the owner |
+| `Orphan` | Owner is deleted immediately; dependents are left behind (no GC) |
+
 ---
 
-## 7. The Status Contract: Kubernetes Objects and the Adapter
+## 7. Error Handling
+
+### Apply vs delete failures
+
+The resource executor treats apply and delete operations differently when they fail:
+
+| Operation | Failure behavior |
+|---|---|
+| **Apply** (create/update) | Fail fast — stop processing remaining resources, set `adapter.executionError` |
+| **Delete** | Continue — all delete operations are attempted even if one fails; all errors are reported |
+
+This means a list containing both apply and delete operations behaves predictably: a delete failure does not prevent the next resource from being deleted, but an apply failure stops further processing.
+
+### Partial delete failures
+
+When one or more delete operations fail:
+
+- The executor continues and attempts all remaining resources in the list
+- All delete errors are collected and joined
+- `adapter.executionError` is set to the **first** failure encountered (centralized signal)
+- `adapter.resourceErrors` is populated with **one entry per failed resource** (granular detail)
+- `adapter.executionStatus` is set to `"failed"`
+
+If an apply failure occurs after some delete failures, all errors (delete + apply) are joined and surfaced together.
+
+Use `adapter.executionError` in Health/Finalized conditions to detect any failure. Use `adapter.?resourceErrors.?<name>` when you need to know which specific resource failed — for example, to include the failing resource name in a status message.
+
+### The Finalized condition
+
+Adapters that handle deletion must report a `Finalized` condition that signals to the HyperFleet API when cleanup is complete. The condition must guard against three failure modes:
+
+1. **Not yet deleting** — `is_deleting` prevents reporting `Finalized=True` before deletion is requested
+2. **Executor failed mid-loop** — `adapter.executionStatus == "success"` prevents `Finalized=True` when some resources were never processed (their context keys are absent, making `hasValue()` return `false` incorrectly)
+3. **Resources still present** — `!resources.?X.hasValue()` confirms the resource is actually gone
+
+```yaml
+- type: "Finalized"
+  status:
+    expression: |
+      is_deleting
+        && adapter.?executionStatus.orValue("") == "success"
+        && !resources.?clusterNamespace.hasValue()
+      ? "True" : "False"
+  reason:
+    expression: |
+      !is_deleting
+      ? "NotDeleting"
+      : adapter.?executionStatus.orValue("") != "success"
+        ? "AdapterUnhealthy"
+        : !resources.?clusterNamespace.hasValue()
+          ? "CleanupConfirmed"
+          : "CleanupInProgress"
+  message:
+    expression: |
+      !is_deleting
+      ? "No pending deletion for this adapter instance"
+      : adapter.?executionStatus.orValue("") != "success"
+        ? "Cannot confirm cleanup while adapter is unhealthy"
+        : !resources.?clusterNamespace.hasValue()
+          ? "All managed resources deleted and verified"
+          : "Resource cleanup in progress"
+```
+
+When an adapter does not handle deletion, use a static `Finalized=False`:
+
+```yaml
+- type: "Finalized"
+  status: "False"
+  reason: "NotDeleting"
+  message: "No pending deletion for this adapter instance"
+```
+
+### Accessing error details in post-actions
+
+Two complementary error signals are available in post-action CEL expressions:
+
+**`adapter.executionError`** — centralized signal for the first failure across all phases. Use this in Health/Finalized conditions as a general "did something fail?" check:
+
+| Variable | Description |
+|---|---|
+| `adapter.executionError.phase` | Phase where the first error occurred (`resources`, `preconditions`, etc.) |
+| `adapter.executionError.step` | Resource or step name that first failed |
+| `adapter.executionError.message` | Human-readable description of the first error |
+
+```cel
+adapter.?executionError.?phase.orValue("unknown")
+adapter.?executionError.?step.orValue("unknown")
+adapter.?executionError.?message.orValue("no details")
+```
+
+**`adapter.resourceErrors`** — per-resource error details from the resources phase. Only populated when a resource-phase operation fails. Use this when you need to surface which specific resource failed or include granular details in a status message:
+
+```cel
+# Check if a specific resource failed
+adapter.?resourceErrors.?clusterNamespace.hasValue()
+
+# Include the failing resource's error in a status message
+adapter.?resourceErrors.?clusterNamespace.?message.orValue("")
+```
+
+The standard Health condition (Section 9 boilerplate) already incorporates these fields.
+
+---
+
+## 8. The Status Contract: Kubernetes Objects and the Adapter
 
 The adapter creates Kubernetes objects that do the real work — Jobs that run validation scripts, Deployments that provision infrastructure, ConfigMaps that hold configuration. The adapter then reads the **status** of these objects and translates it into a report for the HyperFleet API.
 
@@ -787,9 +1023,9 @@ This means your adapter does not need to poll or wait. The framework and Sentine
 
 ---
 
-## 8. Post-Actions (Status Reporting)
+## 9. Post-Actions (Status Reporting)
 
-> The post-action payload is where you wire the status patterns from Section 7 into the actual report sent to the API.
+> The post-action payload is where you wire the status patterns from Section 8 into the actual report sent to the API.
 
 Post-actions build a status payload and send it to the HyperFleet API. This is how the system knows your adapter's work is done (or failed, or in progress).
 
@@ -948,7 +1184,7 @@ Your adapter name must be registered in the `HYPERFLEET_CLUSTER_ADAPTERS` enviro
 
 ---
 
-## 9. Dry-Run Mode
+## 10. Dry-Run Mode
 
 Dry-run mode simulates the full execution pipeline locally. No Kubernetes cluster, no message broker, no API server needed. This is useful to test the creation of adapter-task-config files, as expressions can get complex and going through the real cycle of deploying the adapter is slow.
 
@@ -1111,7 +1347,7 @@ Use `--dry-run-verbose` to see rendered manifests and full API request/response 
 
 ---
 
-## 10. NodePool Adapters
+## 11. NodePool Adapters
 
 NodePool adapters follow the same pattern as cluster adapters with a few differences.
 
@@ -1187,7 +1423,7 @@ Register NodePool adapters in `HYPERFLEET_NODEPOOL_ADAPTERS` (not `HYPERFLEET_CL
 
 ---
 
-## 11. Testing and Validation
+## 12. Testing and Validation
 
 ### Configuration validation
 
@@ -1230,7 +1466,7 @@ The adapter will run preconditions, skip straight to post-actions, and report st
 
 ---
 
-## 12. Deployment Checklist
+## 13. Deployment Checklist
 
 1. **Register your adapter name** in the HyperFleet API's `HYPERFLEET_CLUSTER_ADAPTERS` (or `HYPERFLEET_NODEPOOL_ADAPTERS`) environment variable. Without this, the API won't include your adapter in status aggregation.
 
@@ -1396,6 +1632,7 @@ Use `range` to iterate over list-type values captured via CEL expressions:
 ```
 
 > **Note:** To iterate over a list, the corresponding precondition capture must use a CEL expression that returns the list directly (not a string). For example:
+>
 > ```yaml
 > captures:
 >   - name: "subnets"

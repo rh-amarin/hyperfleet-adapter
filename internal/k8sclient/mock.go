@@ -102,11 +102,13 @@ func (m *MockK8sClient) UpdateResource(
 	return obj, nil
 }
 
-// DeleteResource implements K8sClient.DeleteResource
+// DeleteResource implements transportclient.TransportClient.DeleteResource
 func (m *MockK8sClient) DeleteResource(
 	ctx context.Context,
 	gvk schema.GroupVersionKind,
 	namespace, name string,
+	_ *transportclient.DeleteOptions,
+	_ transportclient.TransportContext,
 ) error {
 	if m.DeleteResourceError != nil {
 		return m.DeleteResourceError

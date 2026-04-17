@@ -942,10 +942,11 @@ func TestExtractValue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}}, result.Value)
 
-	// Get non-existent field - returns nil value (not error)
+	// Get non-existent field - returns nil value with result.Error set (not a returned error)
 	result, err = evaluator.ExtractValue("cluster.nonexistent", "")
-	assert.NoError(t, err)      // No parse error
-	assert.Nil(t, result.Value) // Value is nil (field not found)
+	assert.NoError(t, err)         // No parse error returned
+	assert.Nil(t, result.Value)    // Value is nil (field not found)
+	assert.NotNil(t, result.Error) // result.Error is set so callers can detect absence
 }
 
 func TestEvaluateCondition(t *testing.T) {

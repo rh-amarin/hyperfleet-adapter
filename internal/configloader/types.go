@@ -258,8 +258,15 @@ type Header struct {
 //   - Field: JSONPath expression for simple field extraction (e.g., "{.items[0].name}")
 //   - Expression: CEL expression for complex transformations
 //     (e.g., "response.items.filter(i, i.adapter == 'x')")
+//
+// Default applies only to field: captures. When the field is absent from the API response,
+// Default is used and no WARN is logged. Ignored for expression: captures.
+// Note: null/nil defaults are not supported — use a typed value (false, "", 0).
 type CaptureField struct {
-	Name               string `yaml:"name" validate:"required"`
+	// Default value to use when the field is absent from the API response.
+	// Only effective for field: captures; ignored for expression: captures.
+	Default            interface{} `yaml:"default,omitempty"`
+	Name               string      `yaml:"name" validate:"required"`
 	FieldExpressionDef `yaml:",inline"`
 }
 
@@ -331,8 +338,33 @@ type Resource struct {
 	// NestedDiscoveries defines how to discover individual sub-resources
 	// within the applied manifest. For example, discovering resources
 	// inside a ManifestWork's workload.
-	NestedDiscoveries []NestedDiscovery `yaml:"nested_discoveries,omitempty" validate:"dive"`
-	RecreateOnChange  bool              `yaml:"recreate_on_change,omitempty"`
+	// Lifecycle defines the resource lifecycle behavior, including deletion triggers and policy.
+	// If not set, the resource uses the default apply-only behavior.
+	Lifecycle         *ResourceLifecycle `yaml:"lifecycle,omitempty"`
+	NestedDiscoveries []NestedDiscovery  `yaml:"nested_discoveries,omitempty" validate:"dive"`
+	RecreateOnChange  bool               `yaml:"recreate_on_change,omitempty"`
+}
+
+// ResourceLifecycle defines the lifecycle behavior for a resource.
+type ResourceLifecycle struct {
+	Delete *LifecycleDelete `yaml:"delete,omitempty"`
+}
+
+// LifecycleDelete defines the deletion behavior for a resource.
+type LifecycleDelete struct {
+	// When defines the CEL expression that determines when to delete the resource.
+	When *LifecycleWhen `yaml:"when,omitempty"`
+	// PropagationPolicy is the Kubernetes deletion propagation policy: Background (default), Foreground, Orphan.
+	// For Maestro transport, this is ignored — ManifestWork handles its own cleanup semantics.
+	PropagationPolicy string `yaml:"propagationPolicy,omitempty"`
+}
+
+// LifecycleWhen defines the condition for when deletion should occur.
+type LifecycleWhen struct {
+	// Expression is a CEL expression evaluated each reconciliation loop.
+	// The resource is deleted only when the expression evaluates to true.
+	// Required when lifecycle.delete is configured.
+	Expression string `yaml:"expression,omitempty"`
 }
 
 // NestedDiscovery defines a named discovery for a sub-resource within the parent manifest.

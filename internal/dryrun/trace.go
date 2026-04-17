@@ -54,14 +54,15 @@ type TracePrecondition struct {
 
 // TraceResource is the JSON representation of a resource result.
 type TraceResource struct {
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace,omitempty"`
-	ResName   string `json:"resourceName,omitempty"`
-	Status    string `json:"status"`
-	Operation string `json:"operation"`
-	Reason    string `json:"reason,omitempty"`
-	Error     string `json:"error,omitempty"`
+	DiscoveredState map[string]interface{} `json:"discoveredState,omitempty"`
+	Name            string                 `json:"name"`
+	Kind            string                 `json:"kind"`
+	Namespace       string                 `json:"namespace,omitempty"`
+	ResName         string                 `json:"resourceName,omitempty"`
+	Status          string                 `json:"status"`
+	Operation       string                 `json:"operation"`
+	Reason          string                 `json:"reason,omitempty"`
+	Error           string                 `json:"error,omitempty"`
 }
 
 // TracePostAction is the JSON representation of a post-action result.
@@ -186,6 +187,12 @@ func (t *ExecutionTrace) FormatText() string {
 			fmt.Fprintf(&b, "  [%d/%d] %-30s %s\n", i+1, len(result.ResourceResults), rr.Name, status)
 			fmt.Fprintf(&b, "    Kind: %-12s Namespace: %-12s Name: %s\n", rr.Kind, rr.Namespace, rr.ResourceName)
 
+			if rr.DiscoveredState != nil {
+				if stateBytes, err := json.Marshal(rr.DiscoveredState.Object); err == nil {
+					fmt.Fprintf(&b, "    Pre-delete state:\n      %s\n", prettyJSON(stateBytes))
+				}
+			}
+
 			if t.Verbose {
 				for _, tr := range t.Transport.Records {
 					if tr.Operation == operationApply && tr.GVK.Kind == rr.Kind &&
@@ -211,9 +218,16 @@ func (t *ExecutionTrace) FormatText() string {
 		if r, ok := celVars["resources"].(map[string]interface{}); ok {
 			for name, val := range r {
 				fmt.Fprintf(&b, "  %s:\n", name)
-				b.WriteString("    ")
-				b.WriteString(formatValue(val))
-				b.WriteString("\n")
+				if val == nil {
+					b.WriteString("    null\n")
+					continue
+				}
+				raw, err := json.Marshal(val)
+				if err != nil {
+					fmt.Fprintf(&b, "    %v\n", val)
+					continue
+				}
+				fmt.Fprintf(&b, "    %s\n", prettyJSONWithPrefix(raw, "    "))
 			}
 		}
 	}
@@ -311,6 +325,9 @@ func (t *ExecutionTrace) FormatJSON() ([]byte, error) {
 			Operation: string(rr.Operation),
 			Reason:    rr.OperationReason,
 		}
+		if rr.DiscoveredState != nil {
+			tr.DiscoveredState = rr.DiscoveredState.Object
+		}
 		if rr.Error != nil {
 			tr.Error = rr.Error.Error()
 		}
@@ -373,11 +390,17 @@ func (t *ExecutionTrace) FormatJSON() ([]byte, error) {
 	return json.MarshalIndent(trace, "", "  ")
 }
 
-// prettyJSON attempts to indent raw JSON bytes for readable output.
+// prettyJSON attempts to indent raw JSON bytes for readable output using a 6-space prefix.
 // If the input is not valid JSON, it is returned as-is.
 func prettyJSON(raw []byte) string {
+	return prettyJSONWithPrefix(raw, "      ")
+}
+
+// prettyJSONWithPrefix attempts to indent raw JSON bytes with the given line prefix.
+// If the input is not valid JSON, it is returned as-is.
+func prettyJSONWithPrefix(raw []byte, prefix string) string {
 	var buf bytes.Buffer
-	if err := json.Indent(&buf, raw, "      ", "  "); err != nil {
+	if err := json.Indent(&buf, raw, prefix, "  "); err != nil {
 		return string(raw)
 	}
 	return buf.String()

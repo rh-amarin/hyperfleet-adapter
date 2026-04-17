@@ -320,6 +320,7 @@ resources:
 | `update` | Resource exists | Updates existing resource |
 | `recreate` | `recreate_on_change: true` | Deletes and recreates |
 | `skip` | No changes needed | No operation performed |
+| `delete` | `lifecycle.delete.when` expression is `true` | Deletes the resource; remaining resources still processed |
 | `dry_run` | Dry run mode | Simulated operation |
 
 ### Phase 4: Post-Actions

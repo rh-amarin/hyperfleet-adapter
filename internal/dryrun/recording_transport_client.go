@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/manifest"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transportclient"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -16,6 +19,7 @@ const (
 	operationApply    = "apply"
 	operationGet      = "get"
 	operationDiscover = "discover"
+	operationDelete   = "delete"
 )
 
 // TransportRecord stores details of a transport client operation.
@@ -48,12 +52,21 @@ func NewDryrunTransportClient() *DryrunTransportClient {
 }
 
 // NewDryrunTransportClientWithOverrides creates a DryrunTransportClient
-// with discovery overrides. When a resource is applied and its metadata.name
-// matches a key in the overrides map, the override object replaces the applied
-// manifest in the in-memory store.
+// with discovery overrides. Override objects are pre-loaded into the in-memory
+// store so they are discoverable before any ApplyResource call — enabling
+// delete dry-runs where resources pre-exist on the cluster. When a resource is
+// subsequently applied and its metadata.name matches an override key, the
+// override replaces the applied manifest in the store.
 func NewDryrunTransportClientWithOverrides(overrides DiscoveryOverrides) *DryrunTransportClient {
+	resources := make(map[string]*unstructured.Unstructured, len(overrides))
+	for _, obj := range overrides {
+		u := &unstructured.Unstructured{Object: obj}
+		gvk := u.GroupVersionKind()
+		key := resourceKey(gvk, u.GetNamespace(), u.GetName())
+		resources[key] = u.DeepCopy()
+	}
 	return &DryrunTransportClient{
-		resources:          make(map[string]*unstructured.Unstructured),
+		resources:          resources,
 		Records:            make([]TransportRecord, 0),
 		discoveryOverrides: overrides,
 	}
@@ -106,7 +119,7 @@ func (c *DryrunTransportClient) ApplyResource(
 	if c.discoveryOverrides != nil {
 		if override, found := c.discoveryOverrides[name]; found {
 			overrideObj := &unstructured.Unstructured{Object: override}
-			c.resources[key] = overrideObj
+			c.resources[key] = overrideObj.DeepCopy()
 		} else {
 			c.resources[key] = obj
 		}
@@ -152,11 +165,54 @@ func (c *DryrunTransportClient) GetResource(
 	})
 
 	if !exists {
-		return nil, fmt.Errorf("resource %s/%s %s/%s not found (dry-run)",
-			gvk.Kind, gvk.Version, namespace, name)
+		return nil, apierrors.NewNotFound(
+			schema.GroupResource{Group: gvk.Group, Resource: gvk.Kind}, name)
 	}
 
 	return obj.DeepCopy(), nil
+}
+
+// DeleteResource simulates deletion and records the operation.
+//
+// The behavior is transport-aware via the target context:
+//   - K8s transport passes nil: deletion is synchronous, so the resource is removed
+//     from the store immediately. The post-delete rediscovery returns NotFound, allowing
+//     dependent resources to cascade-delete within the same reconciliation.
+//   - Maestro transport passes a non-nil *maestroclient.TransportContext: deletion is
+//     asynchronous — Maestro cleans up sub-resources before removing the ManifestWork.
+//     The resource is kept in the store with deletionTimestamp set so the post-delete
+//     rediscovery returns it as "still present", and dependents wait for the next
+//     reconciliation, exactly as they would against a real Maestro cluster.
+func (c *DryrunTransportClient) DeleteResource(
+	ctx context.Context,
+	gvk schema.GroupVersionKind,
+	namespace, name string,
+	opts *transportclient.DeleteOptions,
+	target transportclient.TransportContext,
+) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	key := resourceKey(gvk, namespace, name)
+	if target != nil {
+		// Maestro transport: async deletion — mark with deletionTimestamp, keep in store.
+		if obj, exists := c.resources[key]; exists {
+			now := metav1.NewTime(time.Now())
+			obj.SetDeletionTimestamp(&now)
+		}
+	} else {
+		// K8s transport: synchronous deletion — remove from store immediately.
+		delete(c.resources, key)
+	}
+
+	c.Records = append(c.Records, TransportRecord{
+		Operation: operationDelete,
+		GVK:       gvk,
+		Namespace: namespace,
+		Name:      name,
+	})
+
+	return nil
 }
 
 // DiscoverResources returns resources from the in-memory store filtered by discovery config.

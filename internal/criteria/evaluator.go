@@ -218,12 +218,10 @@ func (e *Evaluator) ExtractValue(field, expression string) (*ExtractValueResult,
 			// Parse error - fail fast (indicates bug in config)
 			return result, fmt.Errorf("field extraction failed: %w", err)
 		}
-		// Field not found or empty result - return nil value (allows default to be used)
-		// fieldResult.Error indicates runtime extraction error (e.g., field not found)
-		// This is NOT a parse error, so we don't return error - caller can use default
-		if fieldResult.Error != nil {
-			e.log.Warnf(e.ctx, "failed to extract field %s: %v", field, fieldResult.Error)
-		}
+		// Propagate the extraction error to the caller without logging here.
+		// fieldResult.Error means the field was absent from the response — the caller
+		// decides whether to warn or fall back to a configured default value.
+		result.Error = fieldResult.Error
 		result.Value = fieldResult.Value
 		result.Source = field
 		return result, nil

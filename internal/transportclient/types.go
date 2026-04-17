@@ -13,6 +13,14 @@ type ApplyOptions struct {
 	RecreateOnChange bool
 }
 
+// DeleteOptions configures the behavior of resource delete operations.
+type DeleteOptions struct {
+	// PropagationPolicy is the Kubernetes deletion propagation policy.
+	// Valid values: "Background" (default), "Foreground", "Orphan".
+	// Ignored for Maestro transport — ManifestWork handles its own cleanup semantics.
+	PropagationPolicy string
+}
+
 // ApplyResult contains the result of applying a single resource.
 type ApplyResult struct {
 	// Operation is the operation that was performed (create, update, recreate, skip)

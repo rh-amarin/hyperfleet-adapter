@@ -1,0 +1,77 @@
+{
+  "abc123-manifestwork": {
+    "apiVersion": "work.open-cluster-management.io/v1",
+    "kind": "ManifestWork",
+    "metadata": {
+      "name": "abc123-manifestwork",
+      "namespace": "cluster1",
+      "uid": "fc58b0b8-36df-5ebf-9007-87a65a27dfab",
+      "resourceVersion": "42",
+      "creationTimestamp": "2026-02-18T10:22:10Z",
+      "generation": 3,
+      "labels": {
+        "hyperfleet.io/cluster-id": "abc123",
+        "hyperfleet.io/adapter": "dry-run-adapter",
+        "hyperfleet.io/managed-by": "dry-run-adapter",
+        "maestro.io/resource-type": "manifestwork"
+      },
+      "annotations": {
+        "hyperfleet.io/created-by": "hyperfleet-adapter-framework",
+        "hyperfleet.io/generation": "5"
+      }
+    },
+    "spec": {
+      "workload": {
+        "manifests": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+              "name": "abc123",
+              "labels": {
+                "hyperfleet.io/cluster-id": "abc123",
+                "hyperfleet.io/resource-type": "namespace"
+              }
+            }
+          },
+          {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+              "name": "abc123-config",
+              "namespace": "abc123",
+              "labels": {
+                "hyperfleet.io/cluster-id": "abc123"
+              }
+            },
+            "data": {
+              "cluster_id": "abc123",
+              "cluster_name": "abc123"
+            }
+          }
+        ]
+      },
+      "deleteOption": {
+        "propagationPolicy": "Foreground"
+      }
+    },
+    "status": {
+      "conditions": [
+        {
+          "type": "Applied",
+          "status": "True",
+          "reason": "AppliedManifestWorkComplete",
+          "message": "Apply manifest work complete",
+          "lastTransitionTime": "2026-02-18T10:22:10Z"
+        },
+        {
+          "type": "Available",
+          "status": "True",
+          "reason": "ResourcesAvailable",
+          "message": "All resources are available",
+          "lastTransitionTime": "2026-02-18T10:22:10Z"
+        }
+      ]
+    }
+  }
+}

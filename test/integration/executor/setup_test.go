@@ -79,7 +79,7 @@ func (e *K8sTestEnv) CleanupTestNamespace(t *testing.T, name string) {
 	t.Helper()
 
 	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Namespace"}
-	err := e.Client.DeleteResource(e.Ctx, gvk, "", name)
+	err := e.Client.DeleteResource(e.Ctx, gvk, "", name, nil, nil)
 	if err != nil {
 		t.Logf("Warning: failed to cleanup namespace %s: %v", name, err)
 	}

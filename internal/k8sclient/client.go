@@ -265,14 +265,51 @@ func (c *Client) UpdateResource(
 	return obj, nil
 }
 
-// DeleteResource deletes a Kubernetes resource
-func (c *Client) DeleteResource(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) error {
+// deleteResource deletes a Kubernetes resource (internal — used by recreateResource).
+func (c *Client) deleteResource(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) error {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
 	obj.SetNamespace(namespace)
 	obj.SetName(name)
 
 	err := c.client.Delete(ctx, obj)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return &apperrors.K8sOperationError{
+			Operation: "delete",
+			Resource:  name,
+			Kind:      gvk.Kind,
+			Namespace: namespace,
+			Message:   err.Error(),
+			Err:       err,
+		}
+	}
+	return nil
+}
+
+// DeleteResource deletes a Kubernetes resource, implementing transportclient.TransportClient.
+// It uses the propagation policy from opts (defaults to "Background" if unset).
+// Returns nil if the resource is not found (idempotent).
+func (c *Client) DeleteResource(
+	ctx context.Context,
+	gvk schema.GroupVersionKind,
+	namespace, name string,
+	opts *transportclient.DeleteOptions,
+	_ transportclient.TransportContext,
+) error {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetNamespace(namespace)
+	obj.SetName(name)
+
+	propagationPolicy := metav1.DeletePropagationBackground
+	if opts != nil && opts.PropagationPolicy != "" {
+		propagationPolicy = metav1.DeletionPropagation(opts.PropagationPolicy)
+	}
+
+	err := c.client.Delete(ctx, obj, client.PropagationPolicy(propagationPolicy))
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil

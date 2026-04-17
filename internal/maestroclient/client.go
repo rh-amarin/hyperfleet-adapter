@@ -449,6 +449,25 @@ func (c *Client) resolveTransportContext(
 // Ensure Client implements transportclient.TransportClient
 var _ transportclient.TransportClient = (*Client)(nil)
 
+// DeleteResource deletes a resource, implementing transportclient.TransportClient.
+// For Maestro transport, the resource name is used as the ManifestWork name and the
+// ConsumerName is resolved from the transport context.
+// The propagationPolicy in opts is ignored — ManifestWork handles its own cleanup semantics.
+func (c *Client) DeleteResource(
+	ctx context.Context,
+	_ schema.GroupVersionKind,
+	_, name string,
+	_ *transportclient.DeleteOptions,
+	target transportclient.TransportContext,
+) error {
+	transportCtx := c.resolveTransportContext(target)
+	if transportCtx == nil || transportCtx.ConsumerName == "" {
+		return fmt.Errorf(
+			"maestro TransportContext with ConsumerName is required for DeleteResource")
+	}
+	return c.DeleteManifestWork(ctx, transportCtx.ConsumerName, name)
+}
+
 // ApplyResource applies a rendered ManifestWork (JSON/YAML bytes) to the target cluster.
 // It parses the bytes into a ManifestWork, then applies it via Maestro gRPC.
 // Requires a *maestroclient.TransportContext with ConsumerName.

@@ -296,6 +296,12 @@ post:
                   ? "Resources skipped: " + adapter.?skipReason.orValue("unknown reason")
                   : "Adapter execution completed successfully"
 
+          # Finalized: Deletion cleanup status — always False; this adapter has no deletion flow.
+          - type: "Finalized"
+            status: "False"
+            reason: "NotDeleting"
+            message: "No pending deletion for this adapter instance"
+
         # Pattern 15: Go template rendering in payload values
         observed_generation:
           expression: "generation"

@@ -1,0 +1,52 @@
+{
+  "responses": [
+    {
+      "match": {
+        "method": "GET",
+        "urlPattern": "/api/hyperfleet/v1/clusters/.*"
+      },
+      "responses": [
+        {
+          "statusCode": 200,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "id": "abc123",
+            "name": "abc123",
+            "kind": "Cluster",
+            "href": "/api/hyperfleet/v1/clusters/abc123",
+            "generation": "5",
+            "deleted_time": "2026-04-10T14:00:00Z",
+            "nodes": {
+              "compute": 3
+            },
+            "status": {
+              "conditions": [
+                {
+                  "type": "Ready",
+                  "status": "False"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "match": {
+        "method": "POST",
+        "urlPattern": "/api/hyperfleet/v1/clusters/.*/statuses"
+      },
+      "responses": [
+        {
+          "statusCode": 200,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {}
+        }
+      ]
+    }
+  ]
+}

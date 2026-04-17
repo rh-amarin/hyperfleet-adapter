@@ -147,6 +147,8 @@ func TestFormatText_NonVerboseOmitsBodies(t *testing.T) {
 		output := trace.FormatText()
 
 		assert.NotContains(t, output, "[verbose]")
+		assert.NotContains(t, output, `{"request":"data"}`)
+		assert.NotContains(t, output, `{"response":"data"}`)
 	})
 }
 

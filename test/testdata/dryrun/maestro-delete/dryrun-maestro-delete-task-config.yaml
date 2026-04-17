@@ -1,0 +1,203 @@
+# Task configuration demonstrating lifecycle.delete for Maestro transport.
+#
+# A single ManifestWork is deleted when the cluster record's deleted_time is set.
+# The ManifestWork bundles both the Namespace and ConfigMap — Maestro handles
+# cleanup of sub-resources via its own deleteOption.propagationPolicy.
+#
+# Key difference from Kubernetes transport:
+#   - propagationPolicy inside lifecycle.delete is IGNORED for Maestro transport;
+#     resource cleanup semantics are governed by ManifestWork's spec.deleteOption.
+#   - Deletion is ASYNCHRONOUS: the ManifestWork record persists until Maestro
+#     finishes cleaning up sub-resources on the target cluster. The next
+#     reconciliation's discovery will return NotFound once cleanup is complete.
+#
+# Dry-run usage:
+#   hyperfleet-adapter serve --dry-run \
+#     --task-config test/testdata/dryrun/dryrun-maestro-delete-task-config.yaml \
+#     --dry-run-api-responses test/testdata/dryrun/dryrun-delete-api-responses.json \
+#     --dry-run-discovery test/testdata/dryrun/dryrun-maestro-delete-discovery.json
+
+params:
+  - name: clusterId
+    source: event.id
+    type: string
+    required: true
+
+  - name: generation
+    source: event.generation
+    type: string
+    required: true
+
+  - name: adapterName
+    source: env.ADAPTER_NAME
+    type: string
+    default: dry-run-adapter
+
+preconditions:
+  - name: fetchCluster
+    api_call:
+      method: GET
+      url: /api/hyperfleet/v1/clusters/{{ .clusterId }}
+      timeout: 10s
+    capture:
+      - name: clusterName
+        field: name
+      # is_deleting is the canonical deletion gate used throughout payload expressions.
+      # Capturing it here avoids repeating "has(fetchCluster.deleted_time)" everywhere and
+      # prevents false-positive Finalized=True when resources are absent for
+      # unrelated reasons (e.g., first reconciliation before provisioning).
+      # has() safely checks map key presence without requiring deleted_time to exist.
+      - name: is_deleting
+        expression: "has(fetchCluster.deleted_time)"
+
+resources:
+  # Single ManifestWork resource — bundles all cluster sub-resources.
+  # When deleted, Maestro removes the Namespace and ConfigMap on the target cluster.
+  - name: clusterManifestWork
+    transport:
+      client: maestro
+      maestro:
+        target_cluster: cluster1
+    manifest:
+      apiVersion: work.open-cluster-management.io/v1
+      kind: ManifestWork
+      metadata:
+        name: "{{ .clusterId }}-manifestwork"
+        labels:
+          hyperfleet.io/cluster-id: "{{ .clusterId }}"
+          hyperfleet.io/adapter: "{{ .adapterName }}"
+          hyperfleet.io/managed-by: "{{ .adapterName }}"
+          maestro.io/resource-type: manifestwork
+        annotations:
+          hyperfleet.io/created-by: hyperfleet-adapter-framework
+          hyperfleet.io/generation: "{{ .generation }}"
+      spec:
+        # deleteOption controls how sub-resources are cleaned up when this
+        # ManifestWork is deleted. This is independent of lifecycle.delete.propagationPolicy,
+        # which is ignored by the Maestro transport client.
+        deleteOption:
+          propagationPolicy: Foreground
+        workload:
+          manifests:
+            - apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ .clusterId }}"
+                labels:
+                  hyperfleet.io/cluster-id: "{{ .clusterId }}"
+                  hyperfleet.io/resource-type: namespace
+                annotations:
+                  hyperfleet.io/created-by: hyperfleet-adapter
+                  hyperfleet.io/generation: "{{ .generation }}"
+            - apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ .clusterId }}-config"
+                namespace: "{{ .clusterId }}"
+                labels:
+                  hyperfleet.io/cluster-id: "{{ .clusterId }}"
+                annotations:
+                  hyperfleet.io/generation: "{{ .generation }}"
+              data:
+                cluster_id: "{{ .clusterId }}"
+                cluster_name: "{{ .clusterName }}"
+    discovery:
+      namespace: cluster1
+      by_name: "{{ .clusterId }}-manifestwork"
+    lifecycle:
+      delete:
+        # propagationPolicy is ignored for Maestro transport — ManifestWork's
+        # spec.deleteOption.propagationPolicy governs sub-resource cleanup.
+        propagationPolicy: Background
+        when:
+          # Delete the ManifestWork when the cluster is marked for deletion.
+          # Maestro will clean up the Namespace and ConfigMap asynchronously.
+          expression: "is_deleting"
+
+post:
+  payloads:
+    - name: statusPayload
+      build:
+        adapter: dryrun-maestro-delete
+        conditions:
+          # Health: adapter execution status.
+          - type: Health
+            status:
+              expression: |
+                adapter.?executionStatus.orValue("") == "success"
+                  && !adapter.?resourcesSkipped.orValue(false)
+                ? "True"
+                : "False"
+            reason:
+              expression: |
+                adapter.?executionStatus.orValue("") != "success"
+                ? "ExecutionFailed:" + adapter.?executionError.?phase.orValue("unknown")
+                : adapter.?resourcesSkipped.orValue(false)
+                  ? "ResourcesSkipped"
+                  : "Healthy"
+            message:
+              expression: |
+                adapter.?executionStatus.orValue("") != "success"
+                ? "Adapter failed at phase ["
+                    + adapter.?executionError.?phase.orValue("unknown")
+                    + "] step ["
+                    + adapter.?executionError.?step.orValue("unknown")
+                    + "]: "
+                    + adapter.?executionError.?message.orValue("no details")
+                : "Adapter execution completed successfully"
+
+          # Finalized: True once ManifestWork is confirmed deleted; triggers API hard-delete.
+          #
+          # Four-part guard (per design decision matrix):
+          #   1. is_deleting              — only report True when deletion is actually pending
+          #   2. executionStatus          — prevents false True when executor failed mid-run
+          #   3. resourcesSkipped         — prevents false True when preconditions skipped resources
+          #   4. clusterManifestWork gone — ManifestWork confirmed gone by Maestro
+          - type: Finalized
+            status:
+              expression: |
+                is_deleting
+                  && adapter.?executionStatus.orValue("") == "success"
+                  && !adapter.?resourcesSkipped.orValue(false)
+                  && !resources.?clusterManifestWork.hasValue()
+                ? "True"
+                : "False"
+            reason:
+              expression: |
+                !is_deleting
+                ? ""
+                : adapter.?executionStatus.orValue("") != "success"
+                  ? "AdapterUnhealthy"
+                  : !resources.?clusterManifestWork.hasValue()
+                    ? "CleanupConfirmed"
+                    : "CleanupInProgress"
+            message:
+              expression: |
+                !is_deleting
+                ? ""
+                : adapter.?executionStatus.orValue("") != "success"
+                  ? "Cannot confirm cleanup while adapter is unhealthy"
+                  : !resources.?clusterManifestWork.hasValue()
+                    ? "ManifestWork deleted; Maestro cleanup confirmed"
+                    : "Delete request sent; waiting for Maestro to complete async cleanup"
+
+        observed_generation:
+          expression: generation
+        observed_time: '{{ now | date "2006-01-02T15:04:05Z07:00" }}'
+
+        data:
+          deletion:
+            manifestWorkDeleted:
+              expression: "!resources.?clusterManifestWork.hasValue()"
+            manifestWorkName:
+              expression: |
+                resources.?clusterManifestWork.?metadata.?name.orValue(
+                  clusterId + "-manifestwork"
+                )
+
+  post_actions:
+    - name: update-status
+      api_call:
+        method: POST
+        url: /api/hyperfleet/v1/clusters/{{ .clusterId }}/statuses
+        body: "{{ .statusPayload }}"

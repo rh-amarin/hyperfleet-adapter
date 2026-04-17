@@ -1,13 +1,14 @@
 adapterConfig:
   create: true
   files:
-    adapter-config.yaml: examples/maestro/adapter-config.yaml
+    adapter-config.yaml: examples/maestro-two-resources/adapter-config.yaml
 
 adapterTaskConfig:
   create: true
   files:
-    task-config.yaml: examples/maestro/adapter-task-config.yaml
-    manifestwork.yaml: examples/maestro/adapter-task-resource-manifestwork.yaml
+    task-config.yaml: examples/maestro-two-resources/adapter-task-config.yaml
+    manifestwork-namespace.yaml: examples/maestro-two-resources/adapter-task-resource-manifestwork-namespace.yaml
+    manifestwork-configmap.yaml: examples/maestro-two-resources/adapter-task-resource-manifestwork-configmap.yaml
 
 broker:
   create: true

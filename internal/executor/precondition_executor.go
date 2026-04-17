@@ -133,10 +133,15 @@ func (pe *PreconditionExecutor) executePrecondition(
 		if len(precond.Capture) > 0 {
 			pe.log.Debugf(ctx, "Capturing %d fields from API response", len(precond.Capture))
 
-			// Create evaluator with response data only
-			// Both field (JSONPath) and expression (CEL) work on the same source
+			// Create evaluator with response data only.
+			// Both field (JSONPath) and expression (CEL) work on the same source.
 			captureCtx := criteria.NewEvaluationContext()
 			captureCtx.SetVariablesFromMap(responseData)
+			// Option 1: also expose the full response as a named map variable so capture
+			// expressions can safely navigate optional fields without an "undeclared reference"
+			// error, e.g.: dig(checkClusterState, "deleted_time") != null
+			//              has(checkClusterState.deleted_time)
+			captureCtx.Set(precond.Name, responseData)
 
 			captureEvaluator, evalErr := criteria.NewEvaluator(ctx, captureCtx, pe.log)
 			if evalErr != nil {
@@ -147,14 +152,25 @@ func (pe *PreconditionExecutor) executePrecondition(
 					if err != nil {
 						return result, err
 					}
-					// Error is not nil when there is field missing that is not a bug, but a valid use case
-					if extractResult.Error != nil {
-						pe.log.Warnf(ctx, "Failed to capture '%s' with error: %v", capture.Name, extractResult.Error)
-						continue
+
+					value := extractResult.Value
+
+					// Option 2: default handling for field: captures only.
+					// When a field is absent from the response (extractResult.Error != nil) and
+					// a Default is configured, use it silently. Without a Default, log a WARN.
+					// Expression captures are unaffected — their errors surface as-is.
+					if capture.Field != "" && extractResult.Error != nil {
+						if capture.Default != nil {
+							pe.log.Debugf(ctx, "Field '%s' absent from response, using default: %v", capture.Name, capture.Default)
+							value = capture.Default
+						} else {
+							pe.log.Warnf(ctx, "Failed to capture '%s': %v", capture.Name, extractResult.Error)
+						}
 					}
-					result.CapturedFields[capture.Name] = extractResult.Value
-					execCtx.Params[capture.Name] = extractResult.Value
-					pe.log.Debugf(ctx, "Captured %s = %v (from %s)", capture.Name, extractResult.Value, extractResult.Source)
+
+					result.CapturedFields[capture.Name] = value
+					execCtx.Params[capture.Name] = value
+					pe.log.Debugf(ctx, "Captured %s = %v (from %s)", capture.Name, value, extractResult.Source)
 				}
 			}
 		}

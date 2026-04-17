@@ -12,8 +12,13 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+// testDeletedTime is a non-null deleted_time value used in lifecycle delete tests to trigger when-expressions.
+const testDeletedTime = "2026-01-01T00:00:00Z"
 
 // TestResourceExecutor_ExecuteAll_DiscoveryFailure verifies that when discovery fails after a successful apply,
 // the error is logged and notified: ExecuteAll returns an error, result is failed,
@@ -609,4 +614,900 @@ func TestResolveGVK_StringManifest(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newResourceWithLifecycle is a helper that builds a Resource with lifecycle.delete config.
+func newResourceWithLifecycle(expression, propagationPolicy string) configloader.Resource {
+	r := configloader.Resource{
+		Name:      "test-resource",
+		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Manifest: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]interface{}{
+				"name":      "test-cm",
+				"namespace": "default",
+			},
+		},
+		Discovery: &configloader.DiscoveryConfig{
+			Namespace: "default",
+			ByName:    "test-cm",
+		},
+		Lifecycle: &configloader.ResourceLifecycle{
+			Delete: &configloader.LifecycleDelete{
+				PropagationPolicy: propagationPolicy,
+			},
+		},
+	}
+	if expression != "" {
+		r.Lifecycle.Delete.When = &configloader.LifecycleWhen{Expression: expression}
+	}
+	return r
+}
+
+// newMockTransportClient is a thin wrapper around MockK8sClient to also capture DeleteResource calls.
+type trackingMockClient struct {
+	*k8sclient.MockK8sClient
+	DeleteCalledWithPolicy string
+	DeleteCalled           bool
+}
+
+func (m *trackingMockClient) DeleteResource(
+	ctx context.Context,
+	gvk schema.GroupVersionKind,
+	namespace, name string,
+	opts *transportclient.DeleteOptions,
+	target transportclient.TransportContext,
+) error {
+	m.DeleteCalled = true
+	if opts != nil {
+		m.DeleteCalledWithPolicy = opts.PropagationPolicy
+	}
+	return m.MockK8sClient.DeleteResource(ctx, gvk, namespace, name, opts, target)
+}
+
+func TestResourceExecutor_LifecycleDelete_WhenTrue_ResourceFound_InstantDelete(t *testing.T) {
+	// when.expression is true + resource exists, post-delete rediscovery returns NotFound
+	// (no finalizers — resource is instantly gone after delete API call).
+	// Expected: nil stored → dependent resources can cascade in the same reconciliation.
+	discovered := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]interface{}{
+				"name":      "test-cm",
+				"namespace": "default",
+			},
+		},
+	}
+
+	mock := &trackingMockClient{MockK8sClient: k8sclient.NewMockK8sClient()}
+	// Store via Resources map so DeleteResource clears it and post-delete GetResource returns NotFound.
+	mock.Resources["default/test-cm"] = discovered
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	resource := newResourceWithLifecycle("deleted_time != null", "Background")
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusSuccess, results[0].Status)
+	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+	assert.True(t, mock.DeleteCalled, "DeleteResource should have been called")
+	assert.Equal(t, "Background", mock.DeleteCalledWithPolicy)
+
+	// nil stored: resource is confirmed gone → dependent resources can cascade in this reconciliation.
+	storedVal, exists := execCtx.Resources[resource.Name]
+	assert.True(t, exists, "nil sentinel should be in execCtx.Resources")
+	assert.Nil(t, storedVal, "nil stored when post-delete rediscovery returns NotFound")
+}
+
+func TestResourceExecutor_LifecycleDelete_WhenTrue_ResourceFound_WithFinalizers(t *testing.T) {
+	// when.expression is true + resource exists, post-delete rediscovery still returns the resource
+	// (finalizers are running, or Maestro deletion is async).
+	// Expected: discovered object stored (non-nil) → dependent resources wait for next reconciliation.
+	discovered := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]interface{}{
+				"name":      "test-cm",
+				"namespace": "default",
+			},
+		},
+	}
+
+	mock := &trackingMockClient{MockK8sClient: k8sclient.NewMockK8sClient()}
+	// GetResourceResult persists through DeleteResource → simulates finalizers / async deletion.
+	mock.GetResourceResult = discovered
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	resource := newResourceWithLifecycle("deleted_time != null", "Background")
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusSuccess, results[0].Status)
+	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+	assert.True(t, mock.DeleteCalled, "DeleteResource should have been called")
+
+	// non-nil stored: resource still present (finalizers) → dependents wait for next reconciliation.
+	storedVal, exists := execCtx.Resources[resource.Name]
+	assert.True(t, exists, "resource should be in execCtx.Resources")
+	assert.NotNil(t, storedVal, "non-nil stored when post-delete rediscovery still finds the resource")
+}
+
+func TestResourceExecutor_LifecycleDelete_WhenTrue_ResourceNotFound(t *testing.T) {
+	// when.expression is true + resource not found → no-op, nil stored in execCtx
+	gr := schema.GroupResource{Group: "", Resource: "configmaps"}
+	notFoundErr := apierrors.NewNotFound(gr, "test-cm")
+
+	mock := k8sclient.NewMockK8sClient()
+	mock.GetResourceError = notFoundErr
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	resource := newResourceWithLifecycle("deleted_time != null", "Background")
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusSuccess, results[0].Status)
+	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+	assert.Contains(t, results[0].OperationReason, "already deleted")
+
+	// nil stored so dependent resources' ordering conditions evaluate to true
+	storedVal, exists := execCtx.Resources[resource.Name]
+	assert.True(t, exists, "nil sentinel should be in execCtx.Resources")
+	assert.Nil(t, storedVal, "stored value should be nil when resource not found")
+}
+
+func TestResourceExecutor_LifecycleDelete_WhenFalse_NormalApply(t *testing.T) {
+	// when.expression is false → normal apply path, no delete called
+	mock := k8sclient.NewMockK8sClient()
+	mock.ApplyResourceResult = &transportclient.ApplyResult{
+		Operation: manifest.OperationCreate,
+		Reason:    "mock create",
+	}
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	// deleted_time is null → expression "deleted_time != null" is false
+	resource := newResourceWithLifecycle("deleted_time != null", "Background")
+
+	// Set up GetResource result for post-apply discovery (resource uses ByName discovery → GetResource)
+	mock.GetResourceResult = &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]interface{}{"name": "test-cm", "namespace": "default"},
+	}}
+
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = nil // deleted_time is null/missing
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusSuccess, results[0].Status)
+	assert.Equal(t, manifest.OperationCreate, results[0].Operation, "should use normal apply path")
+}
+
+func TestResourceExecutor_LifecycleDelete_NoLifecycle_NormalApply(t *testing.T) {
+	// No lifecycle config → normal apply path (backward compatible)
+	mock := k8sclient.NewMockK8sClient()
+	mock.ApplyResourceResult = &transportclient.ApplyResult{
+		Operation: manifest.OperationCreate,
+		Reason:    "mock create",
+	}
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	resource := configloader.Resource{
+		Name:      "test-resource",
+		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Manifest: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]interface{}{
+				"name":      "test-cm",
+				"namespace": "default",
+			},
+		},
+		// No Lifecycle
+	}
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, manifest.OperationCreate, results[0].Operation, "no lifecycle → normal apply")
+}
+
+func TestResourceExecutor_LifecycleDelete_NoExpression_DefaultsFalse(t *testing.T) {
+	// lifecycle.delete with no when.expression → defaults to false, resource is applied normally
+	mock := &trackingMockClient{MockK8sClient: k8sclient.NewMockK8sClient()}
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	resource := newResourceWithLifecycle("", "Foreground")
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusSuccess, results[0].Status)
+	assert.False(t, mock.DeleteCalled, "DeleteResource should not be called when expression is absent")
+}
+
+func TestResourceExecutor_LifecycleDelete_OrderingViaResources_InstantDelete(t *testing.T) {
+	// Two resources with ordered deletion (no finalizers).
+	// clusterJob is deleted; post-delete rediscovery returns NotFound (instant delete).
+	// clusterConfigMap sees resources.clusterJob == null in the SAME reconciliation → also deletes.
+	jobResource := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "batch/v1",
+			"kind":       "Job",
+			"metadata":   map[string]interface{}{"name": "my-job", "namespace": "default"},
+		},
+	}
+	configMapResource := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": "my-cm", "namespace": "default"},
+		},
+	}
+
+	mock := k8sclient.NewMockK8sClient()
+	// Resources map: DeleteResource clears entries → post-delete GetResource returns NotFound.
+	mock.Resources["default/my-job"] = jobResource
+	mock.Resources["default/my-cm"] = configMapResource
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	clusterJob := configloader.Resource{
+		Name:      "clusterJob",
+		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Manifest: map[string]interface{}{
+			"apiVersion": "batch/v1",
+			"kind":       "Job",
+			"metadata":   map[string]interface{}{"name": "my-job", "namespace": "default"},
+		},
+		Discovery: &configloader.DiscoveryConfig{Namespace: "default", ByName: "my-job"},
+		Lifecycle: &configloader.ResourceLifecycle{
+			Delete: &configloader.LifecycleDelete{
+				PropagationPolicy: "Background",
+				When:              &configloader.LifecycleWhen{Expression: "deleted_time != null"},
+			},
+		},
+	}
+
+	clusterConfigMap := configloader.Resource{
+		Name:      "clusterConfigMap",
+		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Manifest: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": "my-cm", "namespace": "default"},
+		},
+		Discovery: &configloader.DiscoveryConfig{Namespace: "default", ByName: "my-cm"},
+		Lifecycle: &configloader.ResourceLifecycle{
+			Delete: &configloader.LifecycleDelete{
+				PropagationPolicy: "Background",
+				When: &configloader.LifecycleWhen{
+					Expression: "deleted_time != null && !resources.?clusterJob.hasValue()",
+				},
+			},
+		},
+	}
+
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{clusterJob, clusterConfigMap}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	// clusterJob: deleted; post-delete NotFound → nil stored.
+	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+	assert.Equal(t, "clusterJob", results[0].Name)
+	assert.Nil(t, execCtx.Resources["clusterJob"], "clusterJob nil after instant delete")
+
+	// clusterConfigMap: cascades in the SAME reconciliation because clusterJob is already nil.
+	assert.Equal(t, "clusterConfigMap", results[1].Name)
+	assert.Equal(t, manifest.OperationDelete, results[1].Operation,
+		"clusterConfigMap should cascade in same reconciliation when clusterJob instantly deleted")
+}
+
+func TestResourceExecutor_LifecycleDelete_OrderingViaResources_WithFinalizers(t *testing.T) {
+	// Two resources with ordered deletion (clusterJob has finalizers / async deletion).
+	// clusterJob is deleted; post-delete rediscovery still returns the resource (finalizers running).
+	// clusterConfigMap sees resources.clusterJob != null → waits for next reconciliation.
+	jobResource := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "batch/v1",
+			"kind":       "Job",
+			"metadata":   map[string]interface{}{"name": "my-job", "namespace": "default"},
+		},
+	}
+
+	mock := k8sclient.NewMockK8sClient()
+	// GetResourceResult persists through DeleteResource → simulates finalizers / async deletion.
+	mock.GetResourceResult = jobResource
+	mock.ApplyResourceResult = &transportclient.ApplyResult{Operation: manifest.OperationCreate, Reason: "mock"}
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	clusterJob := configloader.Resource{
+		Name:      "clusterJob",
+		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Manifest: map[string]interface{}{
+			"apiVersion": "batch/v1",
+			"kind":       "Job",
+			"metadata":   map[string]interface{}{"name": "my-job", "namespace": "default"},
+		},
+		Discovery: &configloader.DiscoveryConfig{Namespace: "default", ByName: "my-job"},
+		Lifecycle: &configloader.ResourceLifecycle{
+			Delete: &configloader.LifecycleDelete{
+				PropagationPolicy: "Background",
+				When:              &configloader.LifecycleWhen{Expression: "deleted_time != null"},
+			},
+		},
+	}
+
+	clusterConfigMap := configloader.Resource{
+		Name:      "clusterConfigMap",
+		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Manifest: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": "my-cm", "namespace": "default"},
+		},
+		Discovery: &configloader.DiscoveryConfig{Namespace: "default", ByName: "my-cm"},
+		Lifecycle: &configloader.ResourceLifecycle{
+			Delete: &configloader.LifecycleDelete{
+				PropagationPolicy: "Background",
+				When: &configloader.LifecycleWhen{
+					Expression: "deleted_time != null && !resources.?clusterJob.hasValue()",
+				},
+			},
+		},
+	}
+
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{clusterJob, clusterConfigMap}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	// clusterJob: delete sent; post-delete still present (finalizers) → non-nil stored.
+	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+	assert.NotNil(t, execCtx.Resources["clusterJob"], "clusterJob non-nil while finalizers running")
+
+	// clusterConfigMap: condition false (clusterJob still present) → waits for next reconciliation.
+	assert.Equal(t, "clusterConfigMap", results[1].Name)
+	assert.NotEqual(t, manifest.OperationDelete, results[1].Operation,
+		"clusterConfigMap must wait while clusterJob finalizers are running")
+}
+
+func TestResourceExecutor_LifecycleDelete_OrderingSecondReconciliation(t *testing.T) {
+	// Second reconciliation: clusterJob is now gone (NotFound)
+	// clusterConfigMap sees resources.clusterJob == null → deletes
+	// Job returns NotFound; ConfigMap returns a found resource
+	configMapResource := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": "my-cm", "namespace": "default"},
+		},
+	}
+
+	// Use mock with configmap stored but job not present (job is gone → GetResource returns NotFound)
+	mock2 := k8sclient.NewMockK8sClient()
+	mock2.Resources["default/my-cm"] = configMapResource
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock2,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	clusterJob := configloader.Resource{
+		Name:      "clusterJob",
+		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Manifest: map[string]interface{}{
+			"apiVersion": "batch/v1",
+			"kind":       "Job",
+			"metadata":   map[string]interface{}{"name": "my-job", "namespace": "default"},
+		},
+		Discovery: &configloader.DiscoveryConfig{Namespace: "default", ByName: "my-job"},
+		Lifecycle: &configloader.ResourceLifecycle{
+			Delete: &configloader.LifecycleDelete{
+				When: &configloader.LifecycleWhen{Expression: "deleted_time != null"},
+			},
+		},
+	}
+	clusterConfigMap := configloader.Resource{
+		Name:      "clusterConfigMap",
+		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Manifest: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": "my-cm", "namespace": "default"},
+		},
+		Discovery: &configloader.DiscoveryConfig{Namespace: "default", ByName: "my-cm"},
+		Lifecycle: &configloader.ResourceLifecycle{
+			Delete: &configloader.LifecycleDelete{
+				When: &configloader.LifecycleWhen{Expression: "deleted_time != null && !resources.?clusterJob.hasValue()"},
+			},
+		},
+	}
+
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{clusterJob, clusterConfigMap}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	// clusterJob: not found → nil stored → already deleted
+	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+	assert.Contains(t, results[0].OperationReason, "already deleted")
+
+	// nil stored in context for clusterJob
+	assert.Nil(t, execCtx.Resources["clusterJob"])
+
+	// clusterConfigMap: clusterJob is nil in context → when-expression is true → delete
+	assert.Equal(t, manifest.OperationDelete, results[1].Operation)
+	assert.Equal(t, StatusSuccess, results[1].Status)
+}
+
+func TestResourceExecutor_LifecycleDelete_DeleteError(t *testing.T) {
+	// Delete call fails → result is failed, ExecutionError is set
+	discovered := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": "test-cm", "namespace": "default"},
+		},
+	}
+	deleteErr := errors.New("RBAC denied")
+
+	mock := k8sclient.NewMockK8sClient()
+	mock.GetResourceResult = discovered
+	mock.DeleteResourceError = deleteErr
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	resource := newResourceWithLifecycle("deleted_time != null", "Background")
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.Error(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusFailed, results[0].Status)
+	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+	require.NotNil(t, execCtx.Adapter.ExecutionError)
+	assert.Equal(t, string(PhaseResources), execCtx.Adapter.ExecutionError.Phase)
+	require.NotNil(t, execCtx.Adapter.ResourceErrors, "ResourceErrors map should be populated")
+	assert.Contains(t, execCtx.Adapter.ResourceErrors, resource.Name, "resource error should be keyed by resource name")
+}
+
+// keepOnDeleteMockClient wraps MockK8sClient but intentionally does NOT remove resources on
+// DeleteResource — it only records the TransportContext that was passed. This simulates the
+// async Maestro deletion model: the resource stays discoverable after the delete call until
+// Maestro finishes cleaning up sub-resources.
+type keepOnDeleteMockClient struct {
+	*k8sclient.MockK8sClient
+	DeleteCalledWithTarget transportclient.TransportContext
+}
+
+func (m *keepOnDeleteMockClient) DeleteResource(
+	ctx context.Context,
+	gvk schema.GroupVersionKind,
+	namespace, name string,
+	opts *transportclient.DeleteOptions,
+	target transportclient.TransportContext,
+) error {
+	m.DeleteCalledWithTarget = target
+	// Intentionally skip removal: resource remains discoverable (Maestro async behavior).
+	return nil
+}
+
+// ---- HIGH: CEL expression error handling ----
+
+func TestResourceExecutor_LifecycleDelete_InvalidCELExpression(t *testing.T) {
+	// when.expression contains a syntax error that makes the CEL compiler reject it.
+	// Expected: evaluator returns error → executor fails with StatusFailed and ExecutionError set.
+	// DeleteResource must not be called.
+	mock := &trackingMockClient{MockK8sClient: k8sclient.NewMockK8sClient()}
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	// "deleted_time != null &&" is a dangling logical-AND — invalid CEL syntax.
+	resource := newResourceWithLifecycle("deleted_time != null &&", "Background")
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.Error(t, err, "CEL syntax error must surface as an executor error")
+	assert.Contains(t, err.Error(), "failed to evaluate")
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusFailed, results[0].Status)
+	assert.False(t, mock.DeleteCalled, "DeleteResource must not be called when CEL has a syntax error")
+}
+
+func TestResourceExecutor_LifecycleDelete_CELUndeclaredVariable(t *testing.T) {
+	// when.expression references a variable that was never captured in the precondition phase.
+	// CEL treats undeclared variables as null (DynType), so "not_captured_var != null" evaluates
+	// to false without error — the executor falls through to the normal apply path (OperationCreate).
+	// This is distinct from a syntax error: the expression is syntactically valid but semantically
+	// evaluates to false because the variable resolves to null.
+	mock := &trackingMockClient{MockK8sClient: k8sclient.NewMockK8sClient()}
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	// "not_captured_var" is intentionally absent from execCtx.Params.
+	resource := newResourceWithLifecycle("not_captured_var != null", "Background")
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	// Note: "not_captured_var" is deliberately not set — simulates a missing precondition capture.
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.NoError(t, err, "CEL with undeclared variable evaluates to false (null != null = false), not an error")
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusSuccess, results[0].Status)
+	assert.Equal(t, manifest.OperationCreate, results[0].Operation)
+	assert.False(t, mock.DeleteCalled, "DeleteResource must not be called when lifecycle.delete.when evaluates to false")
+}
+
+// ---- MEDIUM: PropagationPolicy passthrough ----
+
+func TestResourceExecutor_LifecycleDelete_PropagationPolicy(t *testing.T) {
+	// Verifies that the configured PropagationPolicy is passed through to DeleteResource,
+	// and that an empty policy defaults to "Background".
+	tests := []struct {
+		name       string
+		policy     string
+		wantPolicy string
+	}{
+		{"Foreground passed through", "Foreground", "Foreground"},
+		{"Orphan passed through", "Orphan", "Orphan"},
+		{"empty policy defaults to Background", "", "Background"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			discovered := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]interface{}{"name": "test-cm", "namespace": "default"},
+				},
+			}
+			mock := &trackingMockClient{MockK8sClient: k8sclient.NewMockK8sClient()}
+			// Store the resource so pre-delete discovery finds it and delete is attempted.
+			mock.Resources["default/test-cm"] = discovered
+
+			re := newResourceExecutor(&ExecutorConfig{
+				TransportClient: mock,
+				Logger:          logger.NewTestLogger(),
+			})
+
+			resource := newResourceWithLifecycle("deleted_time != null", tt.policy)
+			execCtx := NewExecutionContext(context.Background(), nil, nil)
+			execCtx.Params["deleted_time"] = testDeletedTime
+
+			results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+			assert.True(t, mock.DeleteCalled)
+			assert.Equal(t, tt.wantPolicy, mock.DeleteCalledWithPolicy,
+				"propagation policy %q should be passed to DeleteResource as %q", tt.policy, tt.wantPolicy)
+		})
+	}
+}
+
+// ---- MEDIUM: Pre-delete discovery transient error ----
+
+func TestResourceExecutor_LifecycleDelete_PreDeleteDiscoveryError(t *testing.T) {
+	// Pre-delete discovery returns a non-NotFound error (e.g. network timeout, RBAC denial).
+	// Expected: result is failed, ExecutionError is populated, DeleteResource is not called.
+	transientErr := errors.New("connection timeout: context deadline exceeded")
+	mock := &trackingMockClient{MockK8sClient: k8sclient.NewMockK8sClient()}
+	mock.GetResourceError = transientErr
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	resource := newResourceWithLifecycle("deleted_time != null", "Background")
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.Error(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusFailed, results[0].Status)
+	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+	require.NotNil(t, results[0].Error)
+	assert.Contains(t, results[0].Error.Error(), "connection timeout")
+	require.NotNil(t, execCtx.Adapter.ExecutionError, "ExecutionError must be set for upstream notification")
+	assert.Equal(t, string(PhaseResources), execCtx.Adapter.ExecutionError.Phase)
+	require.NotNil(t, execCtx.Adapter.ResourceErrors, "ResourceErrors map should be populated")
+	assert.Contains(t, execCtx.Adapter.ResourceErrors, resource.Name, "resource error should be keyed by resource name")
+	assert.False(t, mock.DeleteCalled, "DeleteResource must not be called when pre-delete discovery fails")
+}
+
+// ---- MEDIUM: lifecycle block present, but Delete is nil ----
+
+func TestResourceExecutor_LifecycleDelete_DeleteConfigNil(t *testing.T) {
+	// lifecycle block is present but has no delete sub-key (Lifecycle.Delete == nil).
+	// The condition `lifecycle != nil && lifecycle.Delete != nil` is false — falls through to apply.
+	// Expected: normal apply, no delete attempted.
+	mock := k8sclient.NewMockK8sClient()
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	resource := configloader.Resource{
+		Name:      "test-resource",
+		Transport: &configloader.TransportConfig{Client: "kubernetes"},
+		Manifest: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": "test-cm", "namespace": "default"},
+		},
+		Discovery: &configloader.DiscoveryConfig{Namespace: "default", ByName: "test-cm"},
+		Lifecycle: &configloader.ResourceLifecycle{
+			// Delete is nil — lifecycle block exists but no delete config
+		},
+	}
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusSuccess, results[0].Status)
+	assert.Equal(t, manifest.OperationCreate, results[0].Operation,
+		"lifecycle block with no delete config must fall through to normal apply")
+}
+
+// ---- MEDIUM: Maestro async deletion through executor ----
+
+func TestResourceExecutor_LifecycleDelete_Maestro_AsyncDeletion(t *testing.T) {
+	// Maestro transport: when.expression is true → delete is sent with a non-nil TransportContext.
+	// Maestro deletion is async: the resource stays discoverable (deletionTimestamp set, not removed).
+	// Post-delete rediscovery still finds the resource → stored as non-nil → dependents wait.
+	discovered := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "work.open-cluster-management.io/v1",
+			"kind":       "ManifestWork",
+			"metadata":   map[string]interface{}{"name": "cluster-1-work", "namespace": "cluster-1"},
+		},
+	}
+
+	// keepOnDeleteMockClient does NOT remove from Resources on delete — simulates Maestro async cleanup.
+	mock := &keepOnDeleteMockClient{MockK8sClient: k8sclient.NewMockK8sClient()}
+	mock.Resources["cluster-1/cluster-1-work"] = discovered
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	resource := configloader.Resource{
+		Name: "clusterWork",
+		Transport: &configloader.TransportConfig{
+			Client:  "maestro",
+			Maestro: &configloader.MaestroTransportConfig{TargetCluster: "cluster-1"},
+		},
+		Manifest: map[string]interface{}{
+			"apiVersion": "work.open-cluster-management.io/v1",
+			"kind":       "ManifestWork",
+			"metadata":   map[string]interface{}{"name": "cluster-1-work", "namespace": "cluster-1"},
+		},
+		Discovery: &configloader.DiscoveryConfig{Namespace: "cluster-1", ByName: "cluster-1-work"},
+		Lifecycle: &configloader.ResourceLifecycle{
+			Delete: &configloader.LifecycleDelete{
+				When: &configloader.LifecycleWhen{Expression: "deleted_time != null"},
+			},
+		},
+	}
+
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resource}, execCtx)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusSuccess, results[0].Status)
+	assert.Equal(t, manifest.OperationDelete, results[0].Operation)
+
+	// Maestro transport must pass a non-nil TransportContext to DeleteResource.
+	assert.NotNil(t, mock.DeleteCalledWithTarget,
+		"Maestro transport must supply a non-nil TransportContext to DeleteResource")
+
+	// Resource stays non-nil in context: async cleanup → dependents wait for next reconciliation.
+	storedVal, exists := execCtx.Resources["clusterWork"]
+	assert.True(t, exists, "resource key must be present in execCtx after Maestro delete")
+	assert.NotNil(t, storedVal,
+		"non-nil stored: Maestro deletion is async — dependents must wait for next reconciliation")
+}
+
+// multiDeleteMock tracks which resource names were passed to DeleteResource and always
+// returns a configured error, while GetResource returns a distinct object per name.
+type multiDeleteMock struct {
+	*k8sclient.MockK8sClient
+	objects     map[string]*unstructured.Unstructured
+	deleteErr   error
+	deleteCalls []string
+}
+
+func (m *multiDeleteMock) GetResource(
+	ctx context.Context,
+	gvk schema.GroupVersionKind,
+	namespace, name string,
+	target transportclient.TransportContext,
+) (*unstructured.Unstructured, error) {
+	if obj, ok := m.objects[name]; ok {
+		return obj, nil
+	}
+	return nil, apierrors.NewNotFound(schema.GroupResource{}, name)
+}
+
+func (m *multiDeleteMock) DeleteResource(
+	ctx context.Context,
+	gvk schema.GroupVersionKind,
+	namespace, name string,
+	opts *transportclient.DeleteOptions,
+	target transportclient.TransportContext,
+) error {
+	m.deleteCalls = append(m.deleteCalls, name)
+	return m.deleteErr
+}
+
+func TestResourceExecutor_ExecuteAll_ContinuesAfterDeleteFailure(t *testing.T) {
+	// JIRA HYPERFLEET-849: "continue with the rest of resources deletion" even when one fails.
+	// If resource A's delete fails, resource B must still be attempted.
+	makeObj := func(name string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]interface{}{"name": name, "namespace": "default"},
+			},
+		}
+	}
+
+	mock := &multiDeleteMock{
+		MockK8sClient: k8sclient.NewMockK8sClient(),
+		objects: map[string]*unstructured.Unstructured{
+			"resource-a": makeObj("resource-a"),
+			"resource-b": makeObj("resource-b"),
+		},
+		deleteErr: errors.New("RBAC denied"),
+	}
+	// ApplyResource is never reached in the delete path, but set a result to be safe.
+	mock.ApplyResourceResult = &transportclient.ApplyResult{Operation: manifest.OperationCreate}
+
+	re := newResourceExecutor(&ExecutorConfig{
+		TransportClient: mock,
+		Logger:          logger.NewTestLogger(),
+	})
+
+	resourceA := newResourceWithLifecycle("deleted_time != null", "Background")
+	resourceA.Name = "resource-a"
+	resourceA.Discovery = &configloader.DiscoveryConfig{ByName: "resource-a", Namespace: "default"}
+
+	resourceB := newResourceWithLifecycle("deleted_time != null", "Background")
+	resourceB.Name = "resource-b"
+	resourceB.Discovery = &configloader.DiscoveryConfig{ByName: "resource-b", Namespace: "default"}
+
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Params["deleted_time"] = testDeletedTime
+
+	results, err := re.ExecuteAll(context.Background(), []configloader.Resource{resourceA, resourceB}, execCtx)
+
+	// Both resources must have been attempted despite the first failure.
+	require.Len(t, mock.deleteCalls, 2, "both resources must be attempted even after first delete fails")
+	assert.Equal(t, "resource-a", mock.deleteCalls[0])
+	assert.Equal(t, "resource-b", mock.deleteCalls[1])
+
+	// ExecuteAll returns the first delete error.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RBAC denied")
+
+	// Both results are present and marked failed.
+	require.Len(t, results, 2)
+	assert.Equal(t, StatusFailed, results[0].Status)
+	assert.Equal(t, StatusFailed, results[1].Status)
+}
+
+func TestResourceExecutor_GetCELVariables_DeletedResourceAbsent(t *testing.T) {
+	// Nil (deleted) resources must be absent from the CEL resources map so that
+	// "!resources.?clusterJob.hasValue()" correctly evaluates to true when a
+	// resource is confirmed deleted. Optional.none().hasValue() == false, which
+	// is the intended semantics for lifecycle ordering expressions.
+	execCtx := NewExecutionContext(context.Background(), nil, nil)
+	execCtx.Resources["clusterJob"] = nil // explicitly stored nil (deleted resource)
+	execCtx.Resources["clusterConfigMap"] = &unstructured.Unstructured{
+		Object: map[string]interface{}{"kind": "ConfigMap"},
+	}
+
+	vars := execCtx.GetCELVariables()
+	resources, ok := vars["resources"].(map[string]interface{})
+	require.True(t, ok)
+
+	// nil-sentinel resource must NOT be in the CEL resources map;
+	// accessing via resources.?clusterJob returns Optional.none() → hasValue() = false
+	_, exists := resources["clusterJob"]
+	assert.False(t, exists, "nil-sentinel (deleted) resource must be absent from CEL resources map")
+
+	// non-nil resource is present normally
+	_, exists = resources["clusterConfigMap"]
+	assert.True(t, exists, "non-nil resource should be in CEL resources map")
 }

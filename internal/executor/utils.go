@@ -361,6 +361,12 @@ func adapterMetadataToMap(adapter *AdapterMetadata) map[string]interface{} {
 		return map[string]interface{}{}
 	}
 
+	resourceErrors := make(map[string]interface{}, len(adapter.ResourceErrors))
+	for name, execErr := range adapter.ResourceErrors {
+		execErrCopy := execErr
+		resourceErrors[name] = executionErrorToMap(&execErrCopy)
+	}
+
 	return map[string]interface{}{
 		"executionStatus":  adapter.ExecutionStatus,
 		"resourcesSkipped": adapter.ResourcesSkipped,
@@ -368,5 +374,6 @@ func adapterMetadataToMap(adapter *AdapterMetadata) map[string]interface{} {
 		"errorReason":      adapter.ErrorReason,
 		"errorMessage":     adapter.ErrorMessage,
 		"executionError":   executionErrorToMap(adapter.ExecutionError),
+		"resourceErrors":   resourceErrors,
 	}
 }

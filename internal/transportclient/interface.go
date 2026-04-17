@@ -58,4 +58,16 @@ type TransportClient interface {
 		discovery manifest.Discovery,
 		target TransportContext,
 	) (*unstructured.UnstructuredList, error)
+
+	// DeleteResource deletes a resource by GVK, namespace, and name.
+	// For K8s transport: uses the propagationPolicy from opts.
+	// For Maestro transport: calls ManifestWork delete; propagationPolicy is ignored.
+	// Returns nil if the resource is not found (idempotent).
+	DeleteResource(
+		ctx context.Context,
+		gvk schema.GroupVersionKind,
+		namespace, name string,
+		opts *DeleteOptions,
+		target TransportContext,
+	) error
 }

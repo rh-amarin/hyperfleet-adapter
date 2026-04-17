@@ -1,0 +1,196 @@
+# Task configuration demonstrating lifecycle.delete for Kubernetes transport.
+#
+# This example shows dependency-ordered deletion:
+#   1. configmap0 — deleted first (no dependencies)
+#   2. namespace0 — deleted only after configmap0 is gone (!resources.?configmap0.hasValue())
+#
+# The adapter detects pending deletion via the `deleted_time` field captured from the
+# HyperFleet API. When deleted_time is present, is_deleting evaluates to true and
+# the resource is deleted instead of applied.
+#
+# Dry-run usage:
+#   hyperfleet-adapter serve --dry-run \
+#     --task-config test/testdata/dryrun/dryrun-kubernetes-delete-task-config.yaml \
+#     --dry-run-api-responses test/testdata/dryrun/dryrun-delete-api-responses.json \
+#     --dry-run-discovery test/testdata/dryrun/dryrun-kubernetes-delete-discovery.json
+
+params:
+  - name: clusterId
+    source: event.id
+    type: string
+    required: true
+
+  - name: generation
+    source: event.generation
+    type: int
+    required: true
+
+  - name: adapterName
+    source: env.ADAPTER_NAME
+    type: string
+    default: dry-run-adapter
+
+preconditions:
+  - name: fetchCluster
+    api_call:
+      method: GET
+      url: /api/hyperfleet/v1/clusters/{{ .clusterId }}
+      timeout: 10s
+    capture:
+      - name: clusterName
+        field: name
+      # is_deleting is the canonical deletion gate used throughout payload expressions.
+      # Capturing it here avoids repeating "has(fetchCluster.deleted_time)" everywhere and
+      # prevents false-positive Finalized=True when resources are absent for
+      # unrelated reasons (e.g., first reconciliation before provisioning).
+      # has() safely checks map key presence without requiring deleted_time to exist.
+      - name: is_deleting
+        expression: "has(fetchCluster.deleted_time)"
+
+resources:
+  # Resource 0: ConfigMap — deleted first (no dependencies on other resources)
+  - name: configmap0
+    transport:
+      client: kubernetes
+    manifest:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ .clusterId }}-config"
+        namespace: "{{ .clusterId }}"
+        labels:
+          hyperfleet.io/cluster-id: "{{ .clusterId }}"
+        annotations:
+          hyperfleet.io/generation: "{{ .generation }}"
+      data:
+        cluster_id: "{{ .clusterId }}"
+        cluster_name: "{{ .clusterName }}"
+    discovery:
+      namespace: "{{ .clusterId }}"
+      by_name: "{{ .clusterId }}-config"
+    lifecycle:
+      delete:
+        # Background: delete immediately; Kubernetes handles dependent cleanup.
+        propagationPolicy: Background
+        when:
+          # Delete the ConfigMap when the cluster is marked for deletion.
+          expression: "is_deleting"
+
+  # Resource 1: Namespace — deleted only after ConfigMap is gone.
+  # !resources.?configmap0.hasValue() is true once the ConfigMap's discovery returns
+  # NotFound (next reconciliation after configmap0 is actually deleted).
+  - name: namespace0
+    transport:
+      client: kubernetes
+    manifest:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ .clusterId }}"
+        labels:
+          hyperfleet.io/cluster-id: "{{ .clusterId }}"
+          hyperfleet.io/managed-by: "{{ .adapterName }}"
+        annotations:
+          hyperfleet.io/created-by: hyperfleet-adapter
+          hyperfleet.io/generation: "{{ .generation }}"
+    discovery:
+      by_name: "{{ .clusterId }}"
+    lifecycle:
+      delete:
+        # Foreground: wait for all namespace contents to be removed before deleting
+        # the namespace itself. Ensures no orphaned resources remain.
+        propagationPolicy: Foreground
+        when:
+          # Only delete the Namespace once the ConfigMap is confirmed gone.
+          # This prevents the Namespace from being deleted while its ConfigMap
+          # still exists, which would cause the ConfigMap to be orphaned.
+          expression: "is_deleting && !resources.?configmap0.hasValue()"
+
+post:
+  payloads:
+    - name: statusPayload
+      build:
+        adapter: dryrun-kubernetes-delete
+        conditions:
+          # Health: adapter execution status.
+          - type: Health
+            status:
+              expression: |
+                adapter.?executionStatus.orValue("") == "success"
+                  && !adapter.?resourcesSkipped.orValue(false)
+                ? "True"
+                : "False"
+            reason:
+              expression: |
+                adapter.?executionStatus.orValue("") != "success"
+                ? "ExecutionFailed:" + adapter.?executionError.?phase.orValue("unknown")
+                : adapter.?resourcesSkipped.orValue(false)
+                  ? "ResourcesSkipped"
+                  : "Healthy"
+            message:
+              expression: |
+                adapter.?executionStatus.orValue("") != "success"
+                ? "Adapter failed at phase ["
+                    + adapter.?executionError.?phase.orValue("unknown")
+                    + "] step ["
+                    + adapter.?executionError.?step.orValue("unknown")
+                    + "]: "
+                    + adapter.?executionError.?message.orValue("no details")
+                : "Adapter execution completed successfully"
+
+          # Finalized: True once all resources are confirmed deleted; triggers API hard-delete.
+          #
+          # Four-part guard (per design decision matrix):
+          #   1. is_deleting         — only report True when deletion is actually pending
+          #   2. executionStatus     — adapter must be healthy; unhealthy adapters cannot
+          #                           confirm cleanup (Health=False → Finalized=False)
+          #   3. resourcesSkipped    — prevents false True when preconditions skipped resources
+          #   4. resources all gone  — every managed resource must be confirmed gone
+          - type: Finalized
+            status:
+              expression: |
+                is_deleting
+                  && adapter.?executionStatus.orValue("") == "success"
+                  && !adapter.?resourcesSkipped.orValue(false)
+                  && !resources.?configmap0.hasValue()
+                  && !resources.?namespace0.hasValue()
+                ? "True"
+                : "False"
+            reason:
+              expression: |
+                !is_deleting
+                ? ""
+                : adapter.?executionStatus.orValue("") != "success"
+                  ? "AdapterUnhealthy"
+                  : !resources.?configmap0.hasValue()
+                      && !resources.?namespace0.hasValue()
+                    ? "CleanupConfirmed"
+                    : "CleanupInProgress"
+            message:
+              expression: |
+                !is_deleting
+                ? ""
+                : adapter.?executionStatus.orValue("") != "success"
+                  ? "Cannot confirm cleanup while adapter is unhealthy"
+                  : !resources.?configmap0.hasValue()
+                      && !resources.?namespace0.hasValue()
+                    ? "All resources deleted; cleanup confirmed"
+                    : "Deletion in progress; waiting for resources to be removed"
+
+        observed_generation:
+          expression: generation
+        observed_time: '{{ now | date "2006-01-02T15:04:05Z07:00" }}'
+
+        data:
+          deletion:
+            configmapDeleted:
+              expression: "!resources.?configmap0.hasValue()"
+            namespaceDeleted:
+              expression: "!resources.?namespace0.hasValue()"
+
+  post_actions:
+    - name: update-status
+      api_call:
+        method: POST
+        url: /api/hyperfleet/v1/clusters/{{ .clusterId }}/statuses
+        body: "{{ .statusPayload }}"

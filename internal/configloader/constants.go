@@ -87,6 +87,14 @@ const (
 	FieldRecreateOnChange  = "recreate_on_change"
 	FieldDiscovery         = "discovery"
 	FieldNestedDiscoveries = "nested_discoveries"
+	FieldLifecycle         = "lifecycle"
+)
+
+// Lifecycle field names
+const (
+	FieldLifecycleDelete            = "delete"
+	FieldLifecyclePropagationPolicy = "propagationPolicy"
+	FieldLifecycleWhen              = "when"
 )
 
 // Manifest reference field names

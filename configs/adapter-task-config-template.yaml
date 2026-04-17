@@ -135,6 +135,15 @@ preconditions:
       # - name: "activeItemCount"
       #   expression: "items.filter(i, i.status == 'active').size()"
 
+      # DELETION SUPPORT — capture these two fields when lifecycle.delete is used.
+      # deleted_time: raw timestamp from the API (null when resource is not pending deletion).
+      # is_deleting: boolean convenience variable — use this in lifecycle.when expressions
+      #              and payload conditions instead of repeating "deleted_time != null".
+      # - name: "deleted_time"
+      #   field: "deleted_time"
+      # - name: "is_deleting"
+      #   expression: "deleted_time != null"
+
     # Conditions to check. SCOPE: Full execution context
     # You can access:
     #   - Captured values: readyConditionStatus, clusterName, etc.
@@ -187,6 +196,28 @@ resources:
           hyperfleet.io/resource-type: "namespace"
           hyperfleet.io/cluster-id: "{{ .clusterId }}"
           hyperfleet.io/managed-by: "{{ .adapter.name }}"
+
+    # --------------------------------------------------------------------------
+    # OPTIONAL: Deletion lifecycle
+    # --------------------------------------------------------------------------
+    # Uncomment the block below to enable deletion for this resource.
+    # Requires capturing `deleted_time` (and optionally `is_deleting`) in
+    # preconditions, and adding a `Finalized` condition to the status payload.
+    #
+    # lifecycle:
+    #   delete:
+    #     # propagationPolicy controls how Kubernetes removes dependent objects.
+    #     # Background (default): async GC. Foreground: block until dependents gone.
+    #     # Orphan: remove owner, leave dependents. Ignored for Maestro transport.
+    #     propagationPolicy: Background
+    #     when:
+    #       # Expression is evaluated each reconciliation. Resource is deleted only
+    #       # when it evaluates to true.
+    #       # Use `is_deleting` (captured as `deleted_time != null` in preconditions)
+    #       # combined with dependency guards for multi-resource ordering:
+    #       #   expression: "is_deleting"                                    # single resource
+    #       #   expression: "is_deleting && !resources.?dep.hasValue()"  # wait for dep
+    #       expression: "is_deleting"
 
 
 # ============================================================================
@@ -242,6 +273,56 @@ post:
             message:
               expression: |
                 has(adapter.executionError) && adapter.executionError != null && adapter.executionError.message != "" ? adapter.executionError.message : (adapter.?errorMessage.orValue("") != "" ? adapter.?errorMessage.orValue("") : (adapter.?resourcesSkipped.orValue(false) ? "Some resources were skipped" : "All adapter operations completed successfully"))
+
+          # Finalized: required condition that signals deletion cleanup to the API.
+          #
+          # WHEN THIS ADAPTER HAS NO DELETION FLOW — use static values (below):
+          - type: "Finalized"
+            status: "False"
+            reason: "NotDeleting"
+            message: "No pending deletion for this adapter instance"
+
+          # WHEN THIS ADAPTER HANDLES DELETION — replace the block above with the
+          # pattern below. Requires `deleted_time` + `is_deleting` captured in preconditions
+          # and `lifecycle.delete` configured on each managed resource.
+          #
+          # Three-part guard:
+          #   1. is_deleting     — only report True when deletion is actually pending;
+          #                        prevents false Finalized=True on first reconciliation
+          #                        before resources exist
+          #   2. executionStatus — prevents false True when executor failed before processing
+          #                        all resources (unprocessed keys absent → hasValue()=false)
+          #   3. resources gone  — every managed resource confirmed gone via hasValue()
+          #
+          # Use !resources.?X.hasValue() to check absence — NOT has() or == null:
+          #   has() returns true even for nil-valued keys (resource deleted but key present)
+          #   direct == null fails if the key was never added (executor failed mid-loop)
+          #
+          # - type: "Finalized"
+          #   status:
+          #     expression: |
+          #       is_deleting
+          #         && adapter.?executionStatus.orValue("") == "success"
+          #         && !resources.?clusterNamespace.hasValue()
+          #       ? "True" : "False"
+          #   reason:
+          #     expression: |
+          #       !is_deleting
+          #       ? ""
+          #       : adapter.?executionStatus.orValue("") != "success"
+          #         ? "AdapterUnhealthy"
+          #         : !resources.?clusterNamespace.hasValue()
+          #           ? "CleanupConfirmed"
+          #           : "CleanupInProgress"
+          #   message:
+          #     expression: |
+          #       !is_deleting
+          #       ? ""
+          #       : adapter.?executionStatus.orValue("") != "success"
+          #         ? "Cannot confirm cleanup while adapter is unhealthy"
+          #         : !resources.?clusterNamespace.hasValue()
+          #           ? "All managed resources deleted and verified"
+          #           : "Resource cleanup in progress"
 
         # Use CEL expression for numeric fields to preserve type (not Go template which outputs strings)
         observed_generation:

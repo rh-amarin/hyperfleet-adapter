@@ -1,0 +1,74 @@
+# ManifestWork Template — Namespace only
+# File: manifestwork-namespace.yaml
+#
+# This ManifestWork manages only the Namespace resource on the spoke cluster.
+# It is the second resource to be deleted during teardown: it waits until the
+# ConfigMap ManifestWork is confirmed gone before being removed, because the
+# ConfigMap lives inside this namespace.
+#
+# Referenced from adapter-task-config.yaml via:
+#   manifest:
+#     ref: /etc/adapter/manifestwork-namespace.yaml
+
+apiVersion: work.open-cluster-management.io/v1
+kind: ManifestWork
+metadata:
+  name: "mw-namespace-{{ .clusterId }}"
+
+  labels:
+    hyperfleet.io/cluster-id: "{{ .clusterId }}"
+    hyperfleet.io/cluster-name: "{{ .clusterName }}"
+    hyperfleet.io/adapter: "{{ .adapter.name }}"
+    hyperfleet.io/component: "infrastructure"
+    hyperfleet.io/generation: "{{ .generationId }}"
+    hyperfleet.io/resource-group: "cluster-setup"
+    maestro.io/source-id: "{{ .adapter.name }}"
+    app.kubernetes.io/name: "aro-hcp-cluster"
+    app.kubernetes.io/instance: "{{ .clusterId }}"
+    app.kubernetes.io/managed-by: "{{ .adapter.name }}"
+
+  annotations:
+    hyperfleet.io/created-by: "hyperfleet-adapter-framework"
+    hyperfleet.io/managed-by: "{{ .adapter.name }}"
+    hyperfleet.io/generation: "{{ .generationId }}"
+    maestro.io/applied-time: "{{ .timestamp }}"
+
+spec:
+  workload:
+    manifests:
+    - apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ .clusterId }}"
+        labels:
+          hyperfleet.io/cluster-id: "{{ .clusterId }}"
+          hyperfleet.io/cluster-name: "{{ .clusterName }}"
+          hyperfleet.io/managed-by: "{{ .adapter.name }}"
+          hyperfleet.io/resource-type: "namespace"
+        annotations:
+          hyperfleet.io/created-by: "hyperfleet-adapter"
+          hyperfleet.io/generation: "{{ .generationId }}"
+
+  deleteOption:
+    # Foreground: wait for all resources inside the namespace to be deleted first.
+    propagationPolicy: "Foreground"
+
+  manifestConfigs:
+    - resourceIdentifier:
+        group: ""
+        resource: "namespaces"
+        name: "{{ .clusterId }}"
+      updateStrategy:
+        type: "ServerSideApply"
+        serverSideApply:
+          fieldManager: "hyperfleet-adapter"
+          force: false
+      feedbackRules:
+        - type: "JSONPaths"
+          jsonPaths:
+            - name: "phase"
+              path: ".status.phase"
+            - name: "conditions"
+              path: ".status.conditions"
+            - name: "creationTimestamp"
+              path: ".metadata.creationTimestamp"

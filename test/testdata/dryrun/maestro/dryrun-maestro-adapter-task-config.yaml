@@ -265,6 +265,11 @@ post:
                 ? "True"
                 : "False"
             type: Health
+          # Finalized: Deletion cleanup status — always False; this adapter has no deletion flow.
+          - status: "False"
+            reason: "NotDeleting"
+            message: "No pending deletion for this adapter instance"
+            type: Finalized
         # Data extracted from discovered resources (nested discoveries are top-level keys)
         data:
           configmap:

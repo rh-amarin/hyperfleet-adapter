@@ -5,7 +5,6 @@ import (
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transportclient"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // K8sClient defines the interface for Kubernetes operations.
@@ -47,13 +46,6 @@ type K8sClient interface {
 		ctx context.Context,
 		obj *unstructured.Unstructured,
 	) (*unstructured.Unstructured, error)
-
-	// DeleteResource deletes a Kubernetes resource by GVK, namespace, and name.
-	DeleteResource(
-		ctx context.Context,
-		gvk schema.GroupVersionKind,
-		namespace, name string,
-	) error
 }
 
 // Ensure Client implements K8sClient interface

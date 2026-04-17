@@ -125,6 +125,9 @@ type PreconditionResult struct {
 type ResourceResult struct {
 	// Error is the error if Status is StatusFailed
 	Error error
+	// DiscoveredState holds the resource state found before a delete operation.
+	// Only populated for Operation == OperationDelete.
+	DiscoveredState *unstructured.Unstructured
 	// Name is the resource name from config
 	Name string
 	// Kind is the Kubernetes resource kind
@@ -139,7 +142,7 @@ type ResourceResult struct {
 	OperationReason string
 	// Status is the result status
 	Status ExecutionStatus
-	// Operation is the operation performed (create, update, recreate, skip)
+	// Operation is the operation performed (create, update, recreate, skip, delete)
 	Operation manifest.Operation
 }
 
@@ -216,8 +219,15 @@ const (
 
 // AdapterMetadata holds adapter execution metadata for CEL expressions
 type AdapterMetadata struct {
-	// ExecutionError contains detailed error information if execution failed
+	// ExecutionError contains detailed error information for the first failure across all phases.
+	// This is the primary error signal — post-action CEL expressions use adapter.?executionError
+	// to detect any failure and surface a human-readable message.
 	ExecutionError *ExecutionError `json:"executionError,omitempty"`
+	// ResourceErrors holds per-resource error details from the resources phase.
+	// Keyed by resource name. Populated alongside ExecutionError so that adapter authors
+	// who need granular per-resource failure details can access them via
+	// adapter.?resourceErrors.?myResource.?message without replacing the top-level signal.
+	ResourceErrors map[string]ExecutionError `json:"resourceErrors,omitempty"`
 	// ExecutionStatus is the overall execution status (runtime perspective: "success", "failed")
 	ExecutionStatus string
 	// ErrorReason is the error reason if failed (process execution errors only)
@@ -351,9 +361,17 @@ func (ec *ExecutionContext) GetCELVariables() map[string]interface{} {
 	// Add adapter metadata (use helper from utils.go)
 	result["adapter"] = adapterMetadataToMap(&ec.Adapter)
 
-	// Add resources (convert unstructured to maps for CEL evaluation)
+	// Add resources (convert unstructured to maps for CEL evaluation).
+	// Deleted resources (nil sentinels) are intentionally omitted from this map.
+	// A missing key returns Optional.none() via optional access, so
+	// "!resources.?clusterJob.hasValue()" correctly evaluates to true when a
+	// resource is confirmed deleted. Use "adapter.?resourcesSkipped.orValue(false)"
+	// to distinguish "deleted" from "never processed" in Finalized conditions.
 	resources := make(map[string]interface{})
 	for name, val := range ec.Resources {
+		if val == nil {
+			continue // deleted resources are absent from CEL; resources.?X.hasValue() returns false
+		}
 		switch v := val.(type) {
 		case *unstructured.Unstructured:
 			if v != nil {

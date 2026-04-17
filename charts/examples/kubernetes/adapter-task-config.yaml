@@ -39,6 +39,13 @@ preconditions:
         field: "name"
       - name: "generation"
         field: "generation"
+      # is_deleting is the canonical deletion gate used throughout payload expressions.
+      # Capturing it here avoids repeating "has(checkClusterState.deleted_time)" everywhere and
+      # prevents false-positive Finalized=True when resources are absent for
+      # unrelated reasons (e.g., first reconciliation before provisioning).
+      # has() safely checks map key presence without requiring deleted_time to exist.
+      - name: "is_deleting"
+        expression: "has(checkClusterState.deleted_time)"
       - name: "clusterNotReady"
         expression: |
           status.conditions.filter(c, c.type == "Ready").size() > 0
@@ -77,6 +84,20 @@ resources:
         label_selector:
           hyperfleet.io/cluster-id: "{{ .clusterId }}"
           hyperfleet.io/cluster-name: "{{ .clusterName }}"
+    lifecycle:
+      delete:
+        # Foreground: wait for all namespace contents to be removed before deleting
+        # the namespace itself. Ensures no orphaned resources remain.
+        # The namespace is deleted last — only once all inner resources are confirmed gone.
+        propagationPolicy: Foreground
+        when:
+          expression: |
+            is_deleting
+              && !resources.?jobServiceAccount.hasValue()
+              && !resources.?job_role.hasValue()
+              && !resources.?job_rolebinding.hasValue()
+              && !resources.?jobNamespace.hasValue()
+              && !resources.?deploymentNamespace.hasValue()
 
   #  the following configuration is for a job that will be created in the cluster
   # in the namespace created above
@@ -91,6 +112,11 @@ resources:
         label_selector:
           hyperfleet.io/resource-type: "service-account"
           hyperfleet.io/cluster-id: "{{ .clusterId }}"
+    lifecycle:
+      delete:
+        propagationPolicy: Background
+        when:
+          expression: "is_deleting"
 
   - name: "job_role"
     transport:
@@ -102,6 +128,11 @@ resources:
         label_selector:
           hyperfleet.io/cluster-id: "{{ .clusterId }}"
           hyperfleet.io/resource-type: "role"
+    lifecycle:
+      delete:
+        propagationPolicy: Background
+        when:
+          expression: "is_deleting"
 
   - name: "job_rolebinding"
     transport:
@@ -113,6 +144,11 @@ resources:
         label_selector:
           hyperfleet.io/cluster-id: "{{ .clusterId }}"
           hyperfleet.io/resource-type: "role-binding"
+    lifecycle:
+      delete:
+        propagationPolicy: Background
+        when:
+          expression: "is_deleting"
 
   - name: "jobNamespace"
     transport:
@@ -124,6 +160,11 @@ resources:
         label_selector:
           hyperfleet.io/cluster-id: "{{ .clusterId }}"
           hyperfleet.io/resource-type: "job"
+    lifecycle:
+      delete:
+        propagationPolicy: Background
+        when:
+          expression: "is_deleting"
 
   # the following configuration is for a deployment that will be created in the cluster
   # in the same namespace as the adapter
@@ -139,6 +180,11 @@ resources:
         label_selector:
           hyperfleet.io/resource-type: "deployment"
           hyperfleet.io/cluster-id: "{{ .clusterId }}"
+    lifecycle:
+      delete:
+        propagationPolicy: Background
+        when:
+          expression: "is_deleting"
 
 # Post-processing with valid CEL expressions
 # This example contains multiple resources, we will only report on the conditions of the jobNamespace not to overcomplicate the example
@@ -210,6 +256,88 @@ post:
                 : adapter.?resourcesSkipped.orValue(false)
                   ? "Resources skipped: " + adapter.?skipReason.orValue("unknown reason")
                   : "Adapter execution completed successfully"
+          # Deleted: all managed resources confirmed gone.
+          - type: "Deleted"
+            status:
+              expression: |
+                !resources.?clusterNamespace.hasValue()
+                  && !resources.?jobServiceAccount.hasValue()
+                  && !resources.?job_role.hasValue()
+                  && !resources.?job_rolebinding.hasValue()
+                  && !resources.?jobNamespace.hasValue()
+                  && !resources.?deploymentNamespace.hasValue()
+                ? "True"
+                : "False"
+            reason:
+              expression: |
+                !resources.?clusterNamespace.hasValue()
+                  && !resources.?jobServiceAccount.hasValue()
+                  && !resources.?job_role.hasValue()
+                  && !resources.?job_rolebinding.hasValue()
+                  && !resources.?jobNamespace.hasValue()
+                  && !resources.?deploymentNamespace.hasValue()
+                ? "ResourcesDeleted"
+                : "DeletionInProgress"
+            message:
+              expression: |
+                !resources.?clusterNamespace.hasValue()
+                  && !resources.?jobServiceAccount.hasValue()
+                  && !resources.?job_role.hasValue()
+                  && !resources.?job_rolebinding.hasValue()
+                  && !resources.?jobNamespace.hasValue()
+                  && !resources.?deploymentNamespace.hasValue()
+                ? "All cluster resources successfully deleted"
+                : "Deletion in progress; waiting for resources to be removed"
+          # Finalized: True once all resources are confirmed deleted; triggers API hard-delete.
+          #
+          # Four-part guard (per design decision matrix):
+          #   1. is_deleting         — only report True when deletion is actually pending
+          #   2. executionStatus     — adapter must be healthy; unhealthy adapters cannot
+          #                           confirm cleanup (Health=False → Finalized=False)
+          #   3. resourcesSkipped    — prevents false True when preconditions skipped resources
+          #   4. resources all gone  — every managed resource must be confirmed gone
+          - type: "Finalized"
+            status:
+              expression: |
+                is_deleting
+                  && adapter.?executionStatus.orValue("") == "success"
+                  && !adapter.?resourcesSkipped.orValue(false)
+                  && !resources.?clusterNamespace.hasValue()
+                  && !resources.?jobServiceAccount.hasValue()
+                  && !resources.?job_role.hasValue()
+                  && !resources.?job_rolebinding.hasValue()
+                  && !resources.?jobNamespace.hasValue()
+                  && !resources.?deploymentNamespace.hasValue()
+                ? "True"
+                : "False"
+            reason:
+              expression: |
+                !is_deleting
+                ? ""
+                : adapter.?executionStatus.orValue("") != "success"
+                  ? "AdapterUnhealthy"
+                  : !resources.?clusterNamespace.hasValue()
+                      && !resources.?jobServiceAccount.hasValue()
+                      && !resources.?job_role.hasValue()
+                      && !resources.?job_rolebinding.hasValue()
+                      && !resources.?jobNamespace.hasValue()
+                      && !resources.?deploymentNamespace.hasValue()
+                    ? "CleanupConfirmed"
+                    : "CleanupInProgress"
+            message:
+              expression: |
+                !is_deleting
+                ? ""
+                : adapter.?executionStatus.orValue("") != "success"
+                  ? "Cannot confirm cleanup while adapter is unhealthy"
+                  : !resources.?clusterNamespace.hasValue()
+                      && !resources.?jobServiceAccount.hasValue()
+                      && !resources.?job_role.hasValue()
+                      && !resources.?job_rolebinding.hasValue()
+                      && !resources.?jobNamespace.hasValue()
+                      && !resources.?deploymentNamespace.hasValue()
+                    ? "All resources deleted; cleanup confirmed"
+                    : "Deletion in progress; waiting for resources to be removed"
         # Event generation ID metadata field needs to use expression to avoid interpolation issues
         observed_generation:
           expression: "generation"

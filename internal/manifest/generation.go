@@ -35,6 +35,8 @@ const (
 	OperationRecreate Operation = "recreate"
 	// OperationSkip indicates no operation is needed (generations match)
 	OperationSkip Operation = "skip"
+	// OperationDelete indicates the resource should be deleted (lifecycle.delete.when evaluated to true)
+	OperationDelete Operation = "delete"
 )
 
 // ApplyDecision contains the decision about what operation to perform

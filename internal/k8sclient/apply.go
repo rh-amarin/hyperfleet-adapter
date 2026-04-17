@@ -126,6 +126,9 @@ func (c *Client) ApplyManifest(
 
 	case manifest.OperationSkip:
 		// Nothing to do
+
+	case manifest.OperationDelete:
+		// Not handled in ApplyManifest — deletion is performed via DeleteResource directly.
 	}
 
 	if applyErr != nil {
@@ -150,7 +153,7 @@ func (c *Client) recreateResource(
 
 	// Delete the existing resource
 	c.log.Debugf(ctx, "Deleting resource for recreation: %s/%s", gvk.Kind, name)
-	if err := c.DeleteResource(ctx, gvk, namespace, name); err != nil {
+	if err := c.deleteResource(ctx, gvk, namespace, name); err != nil {
 		return nil, fmt.Errorf("failed to delete resource for recreation: %w", err)
 	}
 

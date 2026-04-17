@@ -257,7 +257,7 @@ func TestIntegration_DeleteResource(t *testing.T) {
 		require.NoError(t, err)
 
 		// Delete the namespace
-		err = env.GetClient().DeleteResource(env.GetContext(), gvk.Namespace, "", nsName)
+		err = env.GetClient().DeleteResource(env.GetContext(), gvk.Namespace, "", nsName, nil, nil)
 		require.NoError(t, err)
 
 		// Verify it's being deleted (namespaces go into Terminating phase)
@@ -325,7 +325,7 @@ func TestIntegration_ResourceLifecycle(t *testing.T) {
 		assert.Equal(t, "updated", data)
 
 		// 5. Delete
-		err = env.GetClient().DeleteResource(env.GetContext(), gvk.ConfigMap, "default", cmName)
+		err = env.GetClient().DeleteResource(env.GetContext(), gvk.ConfigMap, "default", cmName, nil, nil)
 		require.NoError(t, err)
 
 		// 6. Verify deletion
@@ -540,11 +540,11 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 		_, err := env.GetClient().CreateResource(env.GetContext(), cm)
 		require.NoError(t, err)
 
-		err = env.GetClient().DeleteResource(env.GetContext(), gvk.ConfigMap, "default", cmName)
+		err = env.GetClient().DeleteResource(env.GetContext(), gvk.ConfigMap, "default", cmName, nil, nil)
 		require.NoError(t, err)
 
 		// Try to delete again - should succeed (idempotent)
-		err = env.GetClient().DeleteResource(env.GetContext(), gvk.ConfigMap, "default", cmName)
+		err = env.GetClient().DeleteResource(env.GetContext(), gvk.ConfigMap, "default", cmName, nil, nil)
 		require.NoError(t, err, "Deleting already deleted resource should succeed")
 	})
 

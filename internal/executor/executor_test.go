@@ -1185,6 +1185,220 @@ func TestPreconditionAPIFailure_ExecutionStatusRemainsFailed(t *testing.T) {
 		"adapter.skipReason should be set")
 }
 
+// TestPreconditionCapture_NamedMapVariable verifies Option 1: the full API response is
+// exposed as a named map variable in the capture CEL context under the precondition name,
+// enabling safe optional-field access via dig() and has().
+func TestPreconditionCapture_NamedMapVariable(t *testing.T) {
+	responseWithField := `{"name":"cluster-1","deleted_time":"2026-04-14T10:00:00Z"}`
+	responseWithoutField := `{"name":"cluster-1"}`
+
+	tests := []struct {
+		name         string
+		responseBody string
+		wantValue    interface{}
+		captureExpr  string
+		wantCaptured bool
+	}{
+		{
+			name:         "dig() returns value when field present",
+			responseBody: responseWithField,
+			captureExpr:  `dig(fetchCluster, "deleted_time") != null`,
+			wantValue:    true,
+			wantCaptured: true,
+		},
+		{
+			name:         "dig() returns false when field absent - no error",
+			responseBody: responseWithoutField,
+			captureExpr:  `dig(fetchCluster, "deleted_time") != null`,
+			wantValue:    false,
+			wantCaptured: true,
+		},
+		{
+			name:         "has() returns true when field present",
+			responseBody: responseWithField,
+			captureExpr:  `has(fetchCluster.deleted_time)`,
+			wantValue:    true,
+			wantCaptured: true,
+		},
+		{
+			name:         "has() returns false when field absent - no error",
+			responseBody: responseWithoutField,
+			captureExpr:  `has(fetchCluster.deleted_time)`,
+			wantValue:    false,
+			wantCaptured: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockAPIClient()
+			mockClient.GetResponse = &hyperfleetapi.Response{
+				StatusCode: 200,
+				Status:     "200 OK",
+				Body:       []byte(tt.responseBody),
+			}
+
+			config := &configloader.Config{
+				Adapter: configloader.AdapterInfo{Name: "test-adapter", Version: "1.0.0"},
+				Clients: configloader.ClientsConfig{
+					HyperfleetAPI: configloader.HyperfleetAPIConfig{
+						BaseURL: "http://mock-api:8000",
+						Version: "v1",
+					},
+				},
+				Preconditions: []configloader.Precondition{
+					{
+						ActionBase: configloader.ActionBase{
+							Name: "fetchCluster",
+							APICall: &configloader.APICall{
+								Method:  "GET",
+								URL:     "/clusters/test",
+								Timeout: "2s",
+							},
+						},
+						Capture: []configloader.CaptureField{
+							{
+								Name:               "is_deleting",
+								FieldExpressionDef: configloader.FieldExpressionDef{Expression: tt.captureExpr},
+							},
+						},
+					},
+				},
+			}
+
+			exec, err := NewBuilder().
+				WithConfig(config).
+				WithAPIClient(mockClient).
+				WithTransportClient(k8sclient.NewMockK8sClient()).
+				WithLogger(logger.NewTestLogger()).
+				Build()
+			require.NoError(t, err)
+
+			ctx := logger.WithEventID(context.Background(), "test-named-map")
+			result := exec.Execute(ctx, map[string]interface{}{})
+
+			require.Equal(t, StatusSuccess, result.Status)
+			require.Len(t, result.PreconditionResults, 1)
+			captured := result.PreconditionResults[0].CapturedFields
+			if tt.wantCaptured {
+				assert.Equal(t, tt.wantValue, captured["is_deleting"],
+					"captured is_deleting should be %v", tt.wantValue)
+			}
+		})
+	}
+}
+
+// TestPreconditionCapture_FieldDefault verifies Option 2: when a field: capture is absent
+// from the API response, the configured Default is used and no WARN is logged.
+// Expression captures are unaffected by Default.
+func TestPreconditionCapture_FieldDefault(t *testing.T) {
+	responseWithField := `{"name":"cluster-1","status_code":"active"}`
+	responseWithoutField := `{"name":"cluster-1"}`
+
+	tests := []struct {
+		name         string
+		responseBody string
+		wantValue    interface{}
+		capture      configloader.CaptureField
+		wantCaptured bool
+	}{
+		{
+			name:         "field present - default not used",
+			responseBody: responseWithField,
+			capture: configloader.CaptureField{
+				Name:               "statusCode",
+				Default:            "unknown",
+				FieldExpressionDef: configloader.FieldExpressionDef{Field: "status_code"},
+			},
+			wantValue:    "active",
+			wantCaptured: true,
+		},
+		{
+			name:         "field absent with default - uses default, no WARN",
+			responseBody: responseWithoutField,
+			capture: configloader.CaptureField{
+				Name:               "statusCode",
+				Default:            "unknown",
+				FieldExpressionDef: configloader.FieldExpressionDef{Field: "status_code"},
+			},
+			wantValue:    "unknown",
+			wantCaptured: true,
+		},
+		{
+			name:         "field absent without default - value is nil",
+			responseBody: responseWithoutField,
+			capture: configloader.CaptureField{
+				Name:               "statusCode",
+				FieldExpressionDef: configloader.FieldExpressionDef{Field: "status_code"},
+			},
+			wantValue:    nil,
+			wantCaptured: true,
+		},
+		{
+			name:         "bool default false when field absent",
+			responseBody: responseWithoutField,
+			capture: configloader.CaptureField{
+				Name:               "is_deleting",
+				Default:            false,
+				FieldExpressionDef: configloader.FieldExpressionDef{Field: "deleted_time"},
+			},
+			wantValue:    false,
+			wantCaptured: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newMockAPIClient()
+			mockClient.GetResponse = &hyperfleetapi.Response{
+				StatusCode: 200,
+				Status:     "200 OK",
+				Body:       []byte(tt.responseBody),
+			}
+
+			config := &configloader.Config{
+				Adapter: configloader.AdapterInfo{Name: "test-adapter", Version: "1.0.0"},
+				Clients: configloader.ClientsConfig{
+					HyperfleetAPI: configloader.HyperfleetAPIConfig{
+						BaseURL: "http://mock-api:8000",
+						Version: "v1",
+					},
+				},
+				Preconditions: []configloader.Precondition{
+					{
+						ActionBase: configloader.ActionBase{
+							Name: "fetchCluster",
+							APICall: &configloader.APICall{
+								Method:  "GET",
+								URL:     "/clusters/test",
+								Timeout: "2s",
+							},
+						},
+						Capture: []configloader.CaptureField{tt.capture},
+					},
+				},
+			}
+
+			exec, err := NewBuilder().
+				WithConfig(config).
+				WithAPIClient(mockClient).
+				WithTransportClient(k8sclient.NewMockK8sClient()).
+				WithLogger(logger.NewTestLogger()).
+				Build()
+			require.NoError(t, err)
+
+			ctx := logger.WithEventID(context.Background(), "test-field-default")
+			result := exec.Execute(ctx, map[string]interface{}{})
+
+			require.Equal(t, StatusSuccess, result.Status)
+			require.Len(t, result.PreconditionResults, 1)
+			captured := result.PreconditionResults[0].CapturedFields
+			assert.Equal(t, tt.wantValue, captured[tt.capture.Name],
+				"captured %s should be %v", tt.capture.Name, tt.wantValue)
+		})
+	}
+}
+
 // helper functions for metrics assertions
 
 func findFamily(families []*dto.MetricFamily, name string) *dto.MetricFamily {

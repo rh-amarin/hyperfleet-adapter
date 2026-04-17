@@ -1,0 +1,71 @@
+# ManifestWork Template — ConfigMap only
+# File: manifestwork-configmap.yaml
+#
+# This ManifestWork manages only the cluster-config ConfigMap inside the cluster
+# namespace on the spoke cluster. It is the first resource to be deleted during
+# teardown (when is_deleting is true), before the Namespace ManifestWork.
+#
+# Referenced from adapter-task-config.yaml via:
+#   manifest:
+#     ref: /etc/adapter/manifestwork-configmap.yaml
+
+apiVersion: work.open-cluster-management.io/v1
+kind: ManifestWork
+metadata:
+  name: "mw-configmap-{{ .clusterId }}"
+
+  labels:
+    hyperfleet.io/cluster-id: "{{ .clusterId }}"
+    hyperfleet.io/cluster-name: "{{ .clusterName }}"
+    hyperfleet.io/adapter: "{{ .adapter.name }}"
+    hyperfleet.io/component: "configuration"
+    hyperfleet.io/generation: "{{ .generationId }}"
+    hyperfleet.io/resource-group: "cluster-setup"
+    maestro.io/source-id: "{{ .adapter.name }}"
+    app.kubernetes.io/name: "aro-hcp-cluster"
+    app.kubernetes.io/instance: "{{ .clusterId }}"
+    app.kubernetes.io/managed-by: "{{ .adapter.name }}"
+
+  annotations:
+    hyperfleet.io/created-by: "hyperfleet-adapter-framework"
+    hyperfleet.io/managed-by: "{{ .adapter.name }}"
+    hyperfleet.io/generation: "{{ .generationId }}"
+    maestro.io/applied-time: "{{ .timestamp }}"
+
+spec:
+  workload:
+    manifests:
+    - apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "cluster-config"
+        namespace: "{{ .clusterId }}"
+        labels:
+          hyperfleet.io/cluster-id: "{{ .clusterId }}"
+          hyperfleet.io/cluster-name: "{{ .clusterName }}"
+          hyperfleet.io/managed-by: "{{ .adapter.name }}"
+        annotations:
+          hyperfleet.io/generation: "{{ .generationId }}"
+      data:
+        cluster_id: "{{ .clusterId }}"
+        cluster_name: "{{ .clusterName }}"
+
+  deleteOption:
+    propagationPolicy: "Background"
+
+  manifestConfigs:
+    - resourceIdentifier:
+        group: ""
+        resource: "configmaps"
+        namespace: "{{ .clusterId }}"
+        name: "cluster-config"
+      updateStrategy:
+        type: "ServerSideApply"
+        serverSideApply:
+          fieldManager: "hyperfleet-adapter"
+          force: false
+      feedbackRules:
+        - type: "JSONPaths"
+          jsonPaths:
+            - name: "creationTimestamp"
+              path: ".metadata.creationTimestamp"

@@ -3,9 +3,11 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/configloader"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/criteria"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/maestroclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/manifest"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transportclient"
@@ -41,18 +43,35 @@ func (re *ResourceExecutor) ExecuteAll(
 	if execCtx.Resources == nil {
 		execCtx.Resources = make(map[string]interface{})
 	}
+
+	// Pre-discover all resources before evaluating any lifecycle.delete.when expression.
+	// This ensures that when conditions can reference sibling resources regardless of their
+	// position in the list. For example, a namespace's when can check
+	// !resources.?jobServiceAccount.hasValue() even if jobServiceAccount comes later.
+	// Errors are non-fatal: a resource that cannot be found simply stays absent from context.
+	re.preDiscoverAll(ctx, resources, execCtx)
+
 	results := make([]ResourceResult, 0, len(resources))
+	var deleteErrs []error
 
 	for _, resource := range resources {
 		result, err := re.executeResource(ctx, resource, execCtx)
 		results = append(results, result)
 
 		if err != nil {
-			return results, err
+			// Delete operations: continue processing remaining resources so that
+			// all deletions are attempted even when one fails (JIRA HYPERFLEET-849:
+			// "continue with the rest of resources deletion").
+			// Apply operations: fail fast (existing behavior).
+			if result.Operation == manifest.OperationDelete {
+				deleteErrs = append(deleteErrs, err)
+				continue
+			}
+			return results, errors.Join(append(deleteErrs, err)...)
 		}
 	}
 
-	return results, nil
+	return results, errors.Join(deleteErrs...)
 }
 
 // executeResource creates or updates a single resource via the transport client.
@@ -75,30 +94,8 @@ func (re *ResourceExecutor) executeResource(
 		return result, NewExecutorError(PhaseResources, resource.Name, "transport client not configured", result.Error)
 	}
 
-	// Step 1: Render the manifest/manifestWork to bytes
-	re.log.Debugf(ctx, "Rendering manifest template for resource %s", resource.Name)
-	renderedBytes, err := re.renderToBytes(resource, execCtx)
-	if err != nil {
-		result.Status = StatusFailed
-		result.Error = err
-		return result, NewExecutorError(PhaseResources, resource.Name, "failed to render manifest", err)
-	}
-
-	// Step 2: Extract resource identity from rendered manifest for result reporting
-	var obj unstructured.Unstructured
-	if unmarshalErr := json.Unmarshal(renderedBytes, &obj.Object); unmarshalErr == nil {
-		result.Kind = obj.GetKind()
-		result.Namespace = obj.GetNamespace()
-		result.ResourceName = obj.GetName()
-	}
-
-	// Step 3: Prepare apply options
-	var applyOpts *transportclient.ApplyOptions
-	if resource.RecreateOnChange {
-		applyOpts = &transportclient.ApplyOptions{RecreateOnChange: true}
-	}
-
-	// Step 4: Build transport context (nil for k8s, *maestroclient.TransportContext for maestro)
+	// Step 1: Build transport context (nil for k8s, *maestroclient.TransportContext for maestro).
+	// Done first so it is available for both the lifecycle delete path and the apply path.
 	var transportTarget transportclient.TransportContext
 	if resource.IsMaestroTransport() && resource.Transport.Maestro != nil {
 		targetCluster, tplErr := utils.RenderTemplate(resource.Transport.Maestro.TargetCluster, execCtx.Params)
@@ -112,7 +109,46 @@ func (re *ResourceExecutor) executeResource(
 		}
 	}
 
-	// Step 5: Call transport client ApplyResource with rendered bytes
+	// Step 2: Check lifecycle.delete — if the when-expression evaluates to true, delete the resource
+	// instead of applying it. This enables dependency-ordered deletion driven by CEL expressions.
+	if resource.Lifecycle != nil && resource.Lifecycle.Delete != nil {
+		shouldDelete, delErr := re.evaluateLifecycleDeleteWhen(ctx, resource, execCtx)
+		if delErr != nil {
+			result.Status = StatusFailed
+			result.Error = delErr
+			return result, NewExecutorError(PhaseResources, resource.Name, "failed to evaluate lifecycle.delete.when", delErr)
+		}
+		if shouldDelete {
+			return re.executeResourceDelete(ctx, resource, execCtx, transportTarget)
+		}
+		// when-expression is false → fall through to normal apply flow
+		re.log.Debugf(ctx, "Resource[%s] lifecycle.delete.when evaluated to false, applying normally", resource.Name)
+	}
+
+	// Step 3: Render the manifest/manifestWork to bytes
+	re.log.Debugf(ctx, "Rendering manifest template for resource %s", resource.Name)
+	renderedBytes, err := re.renderToBytes(resource, execCtx)
+	if err != nil {
+		result.Status = StatusFailed
+		result.Error = err
+		return result, NewExecutorError(PhaseResources, resource.Name, "failed to render manifest", err)
+	}
+
+	// Step 4: Extract resource identity from rendered manifest for result reporting
+	var obj unstructured.Unstructured
+	if unmarshalErr := json.Unmarshal(renderedBytes, &obj.Object); unmarshalErr == nil {
+		result.Kind = obj.GetKind()
+		result.Namespace = obj.GetNamespace()
+		result.ResourceName = obj.GetName()
+	}
+
+	// Step 5: Prepare apply options
+	var applyOpts *transportclient.ApplyOptions
+	if resource.RecreateOnChange {
+		applyOpts = &transportclient.ApplyOptions{RecreateOnChange: true}
+	}
+
+	// Step 6: Call transport client ApplyResource with rendered bytes
 	applyResult, err := transportClient.ApplyResource(ctx, renderedBytes, applyOpts, transportTarget)
 	if err != nil {
 		result.Status = StatusFailed
@@ -128,7 +164,7 @@ func (re *ResourceExecutor) executeResource(
 		return result, NewExecutorError(PhaseResources, resource.Name, "failed to apply resource", err)
 	}
 
-	// Step 6: Extract result
+	// Step 7: Extract result
 	result.Operation = applyResult.Operation
 	result.OperationReason = applyResult.Reason
 
@@ -416,23 +452,223 @@ func (re *ResourceExecutor) resolveGVK(resource configloader.Resource) schema.Gr
 	return gv.WithKind(kind)
 }
 
+// preDiscoverAll discovers all resources and populates execCtx.Resources before the main
+// resource loop begins. This makes every resource's current cluster state available to
+// lifecycle.delete.when CEL expressions regardless of list order.
+//
+// Discovery errors are non-fatal: a resource that is not found or fails discovery simply
+// remains absent from the context (resources.?X.hasValue() returns false), which is the
+// correct semantic for "not yet created" or "already deleted".
+//
+// Note: this pre-pass result may be overwritten during the main loop as resources are
+// applied/deleted and their post-operation state is re-discovered. The pre-pass only
+// guarantees that the initial cluster state is visible to when expressions.
+func (re *ResourceExecutor) preDiscoverAll(
+	ctx context.Context,
+	resources []configloader.Resource,
+	execCtx *ExecutionContext,
+) {
+	for _, resource := range resources {
+		if resource.Discovery == nil {
+			continue
+		}
+
+		var transportTarget transportclient.TransportContext
+		if resource.IsMaestroTransport() && resource.Transport.Maestro != nil {
+			targetCluster, err := utils.RenderTemplate(resource.Transport.Maestro.TargetCluster, execCtx.Params)
+			if err != nil {
+				re.log.Debugf(ctx, "Resource[%s] pre-discovery: failed to render targetCluster (skipping): %v",
+					resource.Name, err)
+				continue
+			}
+			transportTarget = &maestroclient.TransportContext{ConsumerName: targetCluster}
+		}
+
+		discovered, err := re.discoverResource(ctx, resource, execCtx, transportTarget)
+		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				re.log.Debugf(ctx, "Resource[%s] pre-discovery error (non-fatal, skipping): %v", resource.Name, err)
+			}
+			// Not found or error: leave absent from context so resources.?X.hasValue() == false
+			continue
+		}
+		if discovered != nil {
+			execCtx.Resources[resource.Name] = discovered
+			re.log.Debugf(ctx, "Resource[%s] pre-discovered and stored in context", resource.Name)
+		}
+	}
+}
+
+// evaluateLifecycleDeleteWhen evaluates the lifecycle.delete.when CEL expression
+// and returns true if the resource should be deleted.
+//
+// The evaluation uses the same CEL context as post-actions: params + adapter metadata + resources.
+// If when.expression is not set, returns false (no deletion).
+func (re *ResourceExecutor) evaluateLifecycleDeleteWhen(
+	ctx context.Context,
+	resource configloader.Resource,
+	execCtx *ExecutionContext,
+) (bool, error) {
+	if resource.Lifecycle.Delete.When == nil {
+		return false, nil
+	}
+	if resource.Lifecycle.Delete.When.Expression == "" {
+		return false, fmt.Errorf("resource %q has lifecycle.delete.when configured but expression is empty", resource.Name)
+	}
+	expression := resource.Lifecycle.Delete.When.Expression
+
+	evalCtx := criteria.NewEvaluationContext()
+	evalCtx.SetVariablesFromMap(execCtx.GetCELVariables())
+
+	evaluator, err := criteria.NewEvaluator(ctx, evalCtx, re.log)
+	if err != nil {
+		return false, fmt.Errorf("failed to create CEL evaluator: %w", err)
+	}
+
+	celResult, err := evaluator.EvaluateCEL(expression)
+	if err != nil {
+		// Surface the error so the executor marks executionStatus=failed and the operator
+		// sees Health=False. A common cause is a variable used in the expression that was
+		// never captured in the precondition phase (e.g. a typo in a capture name).
+		// Failing loudly is safer than silently skipping deletion: the cluster would stay
+		// stuck in Finalizing with no visible signal.
+		return false, fmt.Errorf("lifecycle.delete.when expression %q failed to evaluate "+
+			"(check that all variables are captured in preconditions): %w", expression, err)
+	}
+
+	execCtx.AddCELEvaluation(PhaseResources, resource.Name+"/lifecycle.delete.when", expression, celResult.Matched)
+	re.log.Debugf(ctx, "Resource[%s] lifecycle.delete.when=%q → matched=%v", resource.Name, expression, celResult.Matched)
+
+	return celResult.Matched, nil
+}
+
+// executeResourceDelete handles the delete path for a resource with lifecycle.delete configured.
+//
+// Delete ordering is driven by a post-delete rediscovery after the delete call:
+//   - If the resource is not found (pre-delete): store nil in context (already deleted), no-op.
+//   - If the resource is found: send delete request, then rediscover to check actual state:
+//   - Post-delete NotFound: resource is truly gone (no finalizers, instant K8s delete).
+//     Store nil — dependent resources can cascade in the same reconciliation.
+//   - Post-delete still present: finalizers are running, or Maestro deletion is async.
+//     Store the object — dependent resources wait for the next reconciliation.
+//
+// This allows same-reconciliation cascading for K8s resources without finalizers, while
+// correctly deferring to the next reconciliation for resources with finalizers or async
+// Maestro deletions.
+func (re *ResourceExecutor) executeResourceDelete(
+	ctx context.Context,
+	resource configloader.Resource,
+	execCtx *ExecutionContext,
+	transportTarget transportclient.TransportContext,
+) (ResourceResult, error) {
+	result := ResourceResult{
+		Name:      resource.Name,
+		Status:    StatusSuccess,
+		Operation: manifest.OperationDelete,
+	}
+
+	// Step 1: Discover the existing resource
+	discovered, discoverErr := re.discoverResource(ctx, resource, execCtx, transportTarget)
+
+	isNotFound := discoverErr != nil && apierrors.IsNotFound(discoverErr)
+	if discoverErr != nil && !isNotFound {
+		result.Status = StatusFailed
+		result.Error = discoverErr
+		re.recordResourceError(execCtx, resource, discoverErr)
+		return result, NewExecutorError(
+			PhaseResources, resource.Name, "failed to discover resource for deletion", discoverErr)
+	}
+
+	// Step 2: If not found — resource is already deleted (or never existed)
+	if discovered == nil || isNotFound {
+		// Store nil — the key is removed from the CEL resources map, so
+		// !resources.?X.hasValue() evaluates to true in this reconciliation.
+		execCtx.Resources[resource.Name] = nil
+		result.OperationReason = "resource not found, already deleted"
+		re.log.Infof(ctx, "Resource[%s] delete: already gone (not found)", resource.Name)
+		return result, nil
+	}
+
+	// Step 3: Extract identity from discovered resource for result reporting
+	gvk := discovered.GroupVersionKind()
+	result.Kind = gvk.Kind
+	result.Namespace = discovered.GetNamespace()
+	result.ResourceName = discovered.GetName()
+	result.DiscoveredState = discovered
+
+	// Step 4: Build delete options
+	propagationPolicy := "Background"
+	if resource.Lifecycle.Delete.PropagationPolicy != "" {
+		propagationPolicy = resource.Lifecycle.Delete.PropagationPolicy
+	}
+	deleteOpts := &transportclient.DeleteOptions{PropagationPolicy: propagationPolicy}
+
+	// Step 5: Delete via transport client
+	if err := re.client.DeleteResource(
+		ctx, gvk, result.Namespace, result.ResourceName, deleteOpts, transportTarget,
+	); err != nil {
+		result.Status = StatusFailed
+		result.Error = err
+		re.recordResourceError(execCtx, resource, err)
+		errCtx := logger.WithK8sResult(ctx, "FAILED")
+		errCtx = logger.WithErrorField(errCtx, err)
+		re.log.Errorf(errCtx, "Resource[%s] delete: FAILED", resource.Name)
+		return result, NewExecutorError(PhaseResources, resource.Name, "failed to delete resource", err)
+	}
+
+	// Step 6: Re-discover the resource after deletion to determine its actual state.
+	// - If NotFound: resource is truly gone (no finalizers, or K8s Background delete was instant).
+	//   Store nil so dependent resources can cascade in the same reconciliation.
+	// - If still present (e.g., deletionTimestamp set, finalizers running, or Maestro async):
+	//   Store the object so dependent resources wait for the next reconciliation.
+	postDeleteDiscovered, postDiscoverErr := re.discoverResource(ctx, resource, execCtx, transportTarget)
+	postIsNotFound := postDiscoverErr != nil && apierrors.IsNotFound(postDiscoverErr)
+	switch {
+	case postDiscoverErr != nil && !postIsNotFound:
+		// Non-fatal: log the error but don't fail the delete — the delete itself succeeded.
+		re.log.Debugf(ctx, "Resource[%s] post-delete discovery error (non-fatal): %v", resource.Name, postDiscoverErr)
+		execCtx.Resources[resource.Name] = discovered
+	case postDeleteDiscovered == nil || postIsNotFound:
+		// Resource is confirmed gone: dependent resources can proceed in this reconciliation.
+		execCtx.Resources[resource.Name] = nil
+		re.log.Debugf(ctx, "Resource[%s] confirmed deleted (post-delete discovery: not found)", resource.Name)
+	default:
+		// Resource still present (finalizers or async deletion): dependents wait for next reconciliation.
+		execCtx.Resources[resource.Name] = postDeleteDiscovered
+		re.log.Debugf(ctx, "Resource[%s] still present after delete (finalizers or async): dependents wait", resource.Name)
+	}
+
+	result.OperationReason = "lifecycle.delete.when evaluated to true"
+
+	re.log.Infof(logger.WithK8sResult(ctx, "SUCCESS"),
+		"Resource[%s] delete: operation=delete propagationPolicy=%s",
+		resource.Name, propagationPolicy)
+
+	return result, nil
+}
+
+// recordResourceError sets execCtx.Adapter.ExecutionError (first error wins) and populates
+// execCtx.Adapter.ResourceErrors with a per-resource entry. Called by executeResourceDelete
+// on both discovery failure and delete failure paths.
+func (re *ResourceExecutor) recordResourceError(execCtx *ExecutionContext, resource configloader.Resource, err error) {
+	execErr := ExecutionError{
+		Phase:   string(PhaseResources),
+		Step:    resource.Name,
+		Message: err.Error(),
+	}
+	if execCtx.Adapter.ExecutionError == nil {
+		execCtx.Adapter.ExecutionError = &execErr
+	}
+	if execCtx.Adapter.ResourceErrors == nil {
+		execCtx.Adapter.ResourceErrors = make(map[string]ExecutionError)
+	}
+	execCtx.Adapter.ResourceErrors[resource.Name] = execErr
+}
+
 // GetResourceAsMap converts an unstructured resource to a map for CEL evaluation
 func GetResourceAsMap(resource *unstructured.Unstructured) map[string]interface{} {
 	if resource == nil {
 		return nil
 	}
 	return resource.Object
-}
-
-// BuildResourcesMap builds a map of all resources for CEL evaluation.
-// Resource names are used directly as keys (snake_case and camelCase both work in CEL).
-// Name validation (no hyphens, no duplicates) is done at config load time.
-func BuildResourcesMap(resources map[string]*unstructured.Unstructured) map[string]interface{} {
-	result := make(map[string]interface{})
-	for name, resource := range resources {
-		if resource != nil {
-			result[name] = resource.Object
-		}
-	}
-	return result
 }
