@@ -101,7 +101,7 @@ spec:
             {{- if eq $brokerType "rabbitmq" }}
             - name: BROKER_URL
               value: {{ .Values.broker.rabbitmq.url | quote }}
-            - name: BROKER_QUEUE
+            - name: HYPERFLEET_BROKER_TOPIC
               value: {{ .Values.broker.rabbitmq.queue | quote }}
             {{- end }}
           {{- if .Values.livenessProbe.enabled }}
