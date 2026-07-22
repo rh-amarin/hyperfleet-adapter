@@ -148,10 +148,13 @@ command:
   - /app/adapter
 
 # -- Container ports exposed by the adapter
-# @default -- `[{containerPort: 8080, name: http}, {containerPort: 9090, name: metrics}]`
+# @default -- `[{containerPort: 8080, name: http}, {containerPort: 8082, name: reconcile}, {containerPort: 9090, name: metrics}]`
 containerPorts:
   - containerPort: 8080
     name: http
+    protocol: TCP
+  - containerPort: 8082
+    name: reconcile
     protocol: TCP
   - containerPort: 9090
     name: metrics

@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -23,7 +25,6 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/metrics"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/telemetry"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/version"
-	"github.com/openshift-hyperfleet/hyperfleet-broker/broker"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -60,6 +61,8 @@ const (
 	HealthServerPort = "8080"
 	// MetricsServerPort is the port for /metrics endpoint
 	MetricsServerPort = "9090"
+	// ReconcileServerPort is the port for the POST /reconcile endpoint
+	ReconcileServerPort = "8082"
 )
 
 func main() {
@@ -561,9 +564,6 @@ func runServe(flags *pflag.FlagSet) error {
 		return fmt.Errorf("failed to create executor: %w", err)
 	}
 
-	// Create the event handler and subscribe to broker
-	handler := executor.AlwaysAck(executor.WithMetrics(exec.CreateHandler(), metricsRecorder, log), log)
-
 	// Handle signals for graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -580,99 +580,54 @@ func runServe(flags *pflag.FlagSet) error {
 		os.Exit(1)
 	}()
 
-	// Get broker config
-	subscriptionID := config.Clients.Broker.SubscriptionID
-	if subscriptionID == "" {
-		err = fmt.Errorf("clients.broker.subscription_id is required")
-		errCtx := logger.WithErrorField(ctx, err)
-		log.Errorf(errCtx, "Missing required broker configuration")
-		return err
+	// Start HTTP reconcile server (replaces broker subscriber)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /reconcile", func(w http.ResponseWriter, r *http.Request) {
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			http.Error(w, "failed to read request body", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		log.Infof(ctx, "reconcile request received, dispatching async execution")
+		execCtx := context.Background()
+		go func() {
+			result := exec.Execute(execCtx, body)
+			if result.Status == executor.StatusFailed {
+				errCtx := logger.WithLogField(execCtx, "resource_id", string(body))
+				log.Errorf(errCtx, "async reconcile execution failed")
+			}
+		}()
+	})
+	reconcileServer := &http.Server{
+		Addr:    ":" + ReconcileServerPort,
+		Handler: mux,
 	}
-
-	topic := config.Clients.Broker.Topic
-	if topic == "" {
-		err = fmt.Errorf("clients.broker.topic is required")
-		errCtx := logger.WithErrorField(ctx, err)
-		log.Errorf(errCtx, "Missing required broker configuration")
-		return err
-	}
-
-	// Create broker metrics recorder
-	brokerMetrics := broker.NewMetricsRecorder(config.Adapter.Name, version.Version, nil)
-
-	// Create broker subscriber and subscribe
-	log.Info(ctx, "Creating broker subscriber...")
-	subscriber, err := broker.NewSubscriber(log, subscriptionID, brokerMetrics)
-	if err != nil {
-		errCtx := logger.WithErrorField(ctx, err)
-		log.Errorf(errCtx, "Failed to create subscriber")
-		return fmt.Errorf("failed to create subscriber: %w", err)
-	}
-	log.Info(ctx, "Broker subscriber created successfully")
-
-	log.Info(ctx, "Subscribing to broker topic...")
-	err = subscriber.Subscribe(ctx, topic, handler)
-	if err != nil {
-		errCtx := logger.WithErrorField(ctx, err)
-		log.Errorf(errCtx, "Failed to subscribe to topic")
-		return fmt.Errorf("failed to subscribe to topic: %w", err)
-	}
-	log.Info(ctx, "Successfully subscribed to broker topic")
+	go func() {
+		log.Infof(ctx, "Starting reconcile HTTP server on port %s", ReconcileServerPort)
+		if serveErr := reconcileServer.ListenAndServe(); serveErr != nil && serveErr != http.ErrServerClosed {
+			errCtx := logger.WithErrorField(ctx, serveErr)
+			log.Errorf(errCtx, "Reconcile server error")
+			healthServer.SetShuttingDown(true)
+			cancel()
+		}
+	}()
 
 	// Mark as ready
 	healthServer.SetBrokerReady(true)
 	log.Info(ctx, "Adapter is ready to process events")
 
-	// Monitor subscription errors
-	fatalErrCh := make(chan error, 1)
-	go func() {
-		for subErr := range subscriber.Errors() {
-			errCtx := logger.WithErrorField(ctx, subErr)
-			log.Errorf(errCtx, "Subscription error")
-			select {
-			case fatalErrCh <- subErr:
-			default:
-			}
-		}
-	}()
-
 	log.Info(ctx, "Adapter started, waiting for events...")
 
-	// Wait for shutdown signal or fatal subscription error
-	select {
-	case <-ctx.Done():
-		log.Info(ctx, "Context canceled, shutting down...")
-	case err := <-fatalErrCh:
-		errCtx := logger.WithErrorField(ctx, err)
-		log.Errorf(errCtx, "Fatal subscription error, shutting down")
-		healthServer.SetShuttingDown(true)
-		cancel()
-	}
+	// Wait for shutdown signal
+	<-ctx.Done()
+	log.Info(ctx, "Context canceled, shutting down...")
 
-	// Close subscriber gracefully
-	log.Info(ctx, "Closing broker subscriber...")
-	shutdownCtx, shutdownCancel := context.WithTimeout(
-		context.Background(), 30*time.Second,
-	)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
-
-	closeDone := make(chan error, 1)
-	go func() {
-		closeDone <- subscriber.Close()
-	}()
-
-	select {
-	case err := <-closeDone:
-		if err != nil {
-			errCtx := logger.WithErrorField(ctx, err)
-			log.Errorf(errCtx, "Error closing subscriber")
-		} else {
-			log.Info(ctx, "Subscriber closed successfully")
-		}
-	case <-shutdownCtx.Done():
-		err := fmt.Errorf("subscriber close timed out after 30 seconds")
-		errCtx := logger.WithErrorField(ctx, err)
-		log.Error(errCtx, "Subscriber close timed out")
+	if shutdownErr := reconcileServer.Shutdown(shutdownCtx); shutdownErr != nil {
+		errCtx := logger.WithErrorField(ctx, shutdownErr)
+		log.Errorf(errCtx, "Reconcile server shutdown error")
 	}
 
 	log.Info(ctx, "Adapter shutdown complete")
@@ -861,10 +816,6 @@ func addOverrideFlags(cmd *cobra.Command) {
 		"HyperFleet API retry base delay (e.g. 1s). Env: HYPERFLEET_API_BASE_DELAY")
 	cmd.Flags().String("hyperfleet-api-max-delay", "",
 		"HyperFleet API retry max delay (e.g. 30s). Env: HYPERFLEET_API_MAX_DELAY")
-
-	// Broker override flags
-	cmd.Flags().String("broker-subscription-id", "", "Broker subscription ID. Env: HYPERFLEET_BROKER_SUBSCRIPTION_ID")
-	cmd.Flags().String("broker-topic", "", "Broker topic. Env: HYPERFLEET_BROKER_TOPIC")
 
 	// Kubernetes override flags
 	cmd.Flags().String("kubernetes-kube-config-path", "",

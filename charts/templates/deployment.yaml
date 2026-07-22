@@ -1,6 +1,5 @@
 {{- include "hyperfleet-adapter.validateValues" . }}
 {{- include "hyperfleet-adapter.validateDeprecatedKeys" . }}
-{{- $brokerConfigValid := include "hyperfleet-adapter.helmValidateBrokerIsConfigured" . }}
 {{- $adapterConfigValid := include "hyperfleet-adapter.helmValidateAdapterIsConfigured" . }}
 {{- $adapterTaskConfigValid := include "hyperfleet-adapter.helmValidateAdapterTaskIsConfigured" . }}
 apiVersion: apps/v1
@@ -95,15 +94,6 @@ spec:
             - name: HYPERFLEET_API_AUTH_TOKEN_CACHE_TTL
               value: {{ .Values.adapterConfig.hyperfleetApi.auth.tokenCacheTtl | quote }}
             {{- end }}
-            - name: BROKER_CONFIG_FILE
-              value: /etc/broker/broker.yaml
-            {{- $brokerType := include "hyperfleet-adapter.brokerType" . }}
-            {{- if eq $brokerType "googlepubsub" }}
-            - name: HYPERFLEET_BROKER_SUBSCRIPTION_ID
-              value: {{ .Values.broker.googlepubsub.subscriptionId | quote }}
-            - name: HYPERFLEET_BROKER_TOPIC
-              value: {{ .Values.broker.googlepubsub.topic | quote }}
-            {{- end }}
             {{- with .Values.tracing }}
             - name: HYPERFLEET_TRACING_ENABLED
               value: {{ .enabled | quote }}
@@ -128,12 +118,6 @@ spec:
               value: "k8s.namespace.name=$(K8S_NAMESPACE)"
             {{- end }}
             {{- end }}
-            {{- if eq $brokerType "rabbitmq" }}
-            - name: BROKER_URL
-              value: {{ .Values.broker.rabbitmq.url | quote }}
-            - name: BROKER_QUEUE
-              value: {{ .Values.broker.rabbitmq.queue | quote }}
-            {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             {{- include "hyperfleet-adapter.renderProbe" (dict "probe" .Values.livenessProbe "defaultPath" "/healthz" "defaultPort" "http") | nindent 12 }}
@@ -156,10 +140,6 @@ spec:
             - name: adapter-config
               mountPath: /etc/adapter
               readOnly: true
-            - name: broker-config
-              mountPath: /etc/broker/broker.yaml
-              subPath: broker.yaml
-              readOnly: true
             {{- if .Values.adapterConfig.hyperfleetApi.auth.enabled }}
             - name: hyperfleet-api-token
               mountPath: {{ .Values.adapterConfig.hyperfleetApi.auth.tokenPath | dir }}
@@ -179,14 +159,6 @@ spec:
                   name: {{ include "hyperfleet-adapter.adapterConfigMapName" . }}
               - configMap:
                   name: {{ include "hyperfleet-adapter.adapterTaskConfigMapName" . }}
-              - configMap:
-                  name: {{ include "hyperfleet-adapter.brokerConfigMapName" . }}
-        - name: broker-config
-          configMap:
-            name: {{ include "hyperfleet-adapter.brokerConfigMapName" . }}
-            items:
-              - key: broker.yaml
-                path: broker.yaml
         {{- if .Values.adapterConfig.hyperfleetApi.auth.enabled }}
         - name: hyperfleet-api-token
           projected:
