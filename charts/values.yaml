@@ -105,7 +105,7 @@ autoscaling:
 # and provide `configMapName` to reference an existing ConfigMap.
 broker:
   # -- Create the broker ConfigMap
-  create: true
+  create: false
   # option1
   # configMapName: ""
 

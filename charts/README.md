@@ -50,8 +50,8 @@ helm install hyperfleet-adapter oci://REGISTRY/hyperfleet-adapter \
 | autoscaling.minReplicas | int | `1` | Minimum number of replicas |
 | autoscaling.targetCPUUtilizationPercentage | int | `80` | Target CPU utilization percentage |
 | autoscaling.targetMemoryUtilizationPercentage | int | `80` | Target memory utilization percentage |
-| broker | object | `{"create":true,"googlepubsub":{"createSubscriptionIfMissing":false,"createTopicIfMissing":false,"deadLetterTopic":"","expirationTTL":"","messageRetentionDuration":"","projectId":"","subscriptionId":"","topic":""},"rabbitmq":{"exchange":"","exchangeType":"topic","queue":"","url":""},"type":""}` | Broker configuration for event consumption. Supports RabbitMQ and Google Pub/Sub. Use `broker.yaml` for inline config, or set `create: false` and provide `configMapName` to reference an existing ConfigMap. |
-| broker.create | bool | `true` | Create the broker ConfigMap |
+| broker | object | `{"create":false,"googlepubsub":{"createSubscriptionIfMissing":false,"createTopicIfMissing":false,"deadLetterTopic":"","expirationTTL":"","messageRetentionDuration":"","projectId":"","subscriptionId":"","topic":""},"rabbitmq":{"exchange":"","exchangeType":"topic","queue":"","url":""},"type":""}` | Broker configuration for event consumption. Supports RabbitMQ and Google Pub/Sub. Use `broker.yaml` for inline config, or set `create: false` and provide `configMapName` to reference an existing ConfigMap. |
+| broker.create | bool | `false` | Create the broker ConfigMap |
 | broker.type | string | `""` | Broker type (must be `googlepubsub` or `rabbitmq`) |
 | broker.googlepubsub | object | `{"createSubscriptionIfMissing":false,"createTopicIfMissing":false,"deadLetterTopic":"","expirationTTL":"","messageRetentionDuration":"","projectId":"","subscriptionId":"","topic":""}` | Google Pub/Sub configuration |
 | broker.googlepubsub.projectId | string | `""` | GCP project ID |
@@ -68,7 +68,7 @@ helm install hyperfleet-adapter oci://REGISTRY/hyperfleet-adapter \
 | broker.rabbitmq.exchange | string | `""` | Exchange name |
 | broker.rabbitmq.exchangeType | string | `"topic"` | Exchange type |
 | command | list | `["/app/adapter"]` | Container command override |
-| containerPorts | list | `[{containerPort: 8080, name: http}, {containerPort: 9090, name: metrics}]` | Container ports exposed by the adapter |
+| containerPorts | list | `[{containerPort: 8080, name: http}, {containerPort: 8082, name: reconcile}, {containerPort: 9090, name: metrics}]` | Container ports exposed by the adapter |
 | env | list | `[]` | Additional environment variables injected into the adapter container |
 | extraVolumeMounts | list | `[]` | Extra volume mounts added to the adapter container |
 | extraVolumes | list | `[]` | Extra volumes added to the pod |
