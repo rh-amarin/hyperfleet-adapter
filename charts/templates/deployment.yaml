@@ -118,6 +118,33 @@ spec:
               value: "k8s.namespace.name=$(K8S_NAMESPACE)"
             {{- end }}
             {{- end }}
+            {{- if .Values.database.secretName }}
+            - name: HYPERFLEET_DATABASE_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.secretName }}
+                  key: db.host
+            - name: HYPERFLEET_DATABASE_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.secretName }}
+                  key: db.port
+            - name: HYPERFLEET_DATABASE_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.secretName }}
+                  key: db.name
+            - name: HYPERFLEET_DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.secretName }}
+                  key: db.user
+            - name: HYPERFLEET_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.secretName }}
+                  key: db.password
+            {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             {{- include "hyperfleet-adapter.renderProbe" (dict "probe" .Values.livenessProbe "defaultPath" "/healthz" "defaultPort" "http") | nindent 12 }}

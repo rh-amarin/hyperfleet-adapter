@@ -75,6 +75,12 @@ func redactedClients(clients ClientsConfig) ClientsConfig {
 		}
 		copy.Maestro = &maestroCopy
 	}
+	if clients.Database.Password != "" {
+		copy.Database.Password = redactedValue
+	}
+	if clients.Database.Username != "" {
+		copy.Database.Username = redactedValue
+	}
 	return copy
 }
 
@@ -656,6 +662,25 @@ type ClientsConfig struct {
 	Broker        BrokerConfig         `yaml:"broker,omitempty" mapstructure:"broker"`
 	Kubernetes    KubernetesConfig     `yaml:"kubernetes" mapstructure:"kubernetes"`
 	HyperfleetAPI HyperfleetAPIConfig  `yaml:"hyperfleet_api" mapstructure:"hyperfleet_api"`
+	Database      DatabaseConfig       `yaml:"database,omitempty" mapstructure:"database"`
+	MessageQueue  MessageQueueConfig   `yaml:"message_queue,omitempty" mapstructure:"message_queue"`
+}
+
+// DatabaseConfig contains PostgreSQL connection settings for the message queue
+type DatabaseConfig struct {
+	Host     string `yaml:"host" mapstructure:"host"`
+	Port     int    `yaml:"port" mapstructure:"port"`
+	Name     string `yaml:"name" mapstructure:"name"`
+	Username string `yaml:"username" mapstructure:"username"`
+	Password string `yaml:"password" mapstructure:"password"`
+	SSLMode  string `yaml:"ssl_mode,omitempty" mapstructure:"ssl_mode"`
+}
+
+// MessageQueueConfig contains settings for the DB-based message queue consumer
+type MessageQueueConfig struct {
+	PollInterval string `yaml:"poll_interval,omitempty" mapstructure:"poll_interval"`
+	Workers      int    `yaml:"workers,omitempty" mapstructure:"workers"`
+	BatchSize    int    `yaml:"batch_size,omitempty" mapstructure:"batch_size"`
 }
 
 // MaestroClientConfig contains Maestro client configuration

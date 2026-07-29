@@ -153,9 +153,6 @@ containerPorts:
   - containerPort: 8080
     name: http
     protocol: TCP
-  - containerPort: 8082
-    name: reconcile
-    protocol: TCP
   - containerPort: 9090
     name: metrics
     protocol: TCP
@@ -402,3 +399,11 @@ tracing:
   samplerArg: "1.0"
   # -- Context propagation formats
   propagators: "tracecontext,baggage"
+
+# -- Database connection for message queue (DB-as-queue transport).
+# The adapter reads reconciliation messages from the same PostgreSQL used by the API.
+database:
+  # -- Name of the Kubernetes Secret containing DB credentials.
+  # Expected keys: db.host, db.port, db.name, db.user, db.password.
+  # Leave empty to disable DB-based message queue (falls back to HTTP reconcile).
+  secretName: ""

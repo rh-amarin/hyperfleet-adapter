@@ -50,6 +50,15 @@ var viperKeyMappings = map[string]string{
 	"clients::kubernetes::api_version":                 "KUBERNETES_API_VERSION",
 	"clients::kubernetes::qps":                         "KUBERNETES_QPS",
 	"clients::kubernetes::burst":                       "KUBERNETES_BURST",
+	"clients::database::host":                          "DATABASE_HOST",
+	"clients::database::port":                          "DATABASE_PORT",
+	"clients::database::name":                          "DATABASE_NAME",
+	"clients::database::username":                      "DATABASE_USERNAME",
+	"clients::database::password":                      "DATABASE_PASSWORD",
+	"clients::database::ssl_mode":                      "DATABASE_SSL_MODE",
+	"clients::message_queue::poll_interval":             "MESSAGE_QUEUE_POLL_INTERVAL",
+	"clients::message_queue::workers":                   "MESSAGE_QUEUE_WORKERS",
+	"clients::message_queue::batch_size":                "MESSAGE_QUEUE_BATCH_SIZE",
 }
 
 // cliFlags defines mappings from CLI flag names to config paths

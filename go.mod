@@ -8,6 +8,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/google/cel-go v0.29.2
+	github.com/lib/pq v1.12.3
 	github.com/mitchellh/copystructure v1.2.0
 	github.com/openshift-hyperfleet/hyperfleet-broker v1.1.1
 	github.com/openshift-online/maestro v0.0.0-20260202062555-48b47506a254

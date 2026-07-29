@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -13,12 +12,15 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/lib/pq"
+
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/configloader"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/dryrun"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/executor"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/hyperfleetapi"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/k8sclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/maestroclient"
+	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/messagequeue"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/internal/transportclient"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/health"
 	"github.com/openshift-hyperfleet/hyperfleet-adapter/pkg/logger"
@@ -61,8 +63,6 @@ const (
 	HealthServerPort = "8080"
 	// MetricsServerPort is the port for /metrics endpoint
 	MetricsServerPort = "9090"
-	// ReconcileServerPort is the port for the POST /reconcile endpoint
-	ReconcileServerPort = "8082"
 )
 
 func main() {
@@ -580,55 +580,61 @@ func runServe(flags *pflag.FlagSet) error {
 		os.Exit(1)
 	}()
 
-	// Start HTTP reconcile server (replaces broker subscriber)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /reconcile", func(w http.ResponseWriter, r *http.Request) {
-		body, readErr := io.ReadAll(r.Body)
-		if readErr != nil {
-			http.Error(w, "failed to read request body", http.StatusBadRequest)
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
-		log.Infof(ctx, "reconcile request received, dispatching async execution")
-		execCtx := context.Background()
-		go func() {
-			result := exec.Execute(execCtx, body)
-			if result.Status == executor.StatusFailed {
-				errCtx := logger.WithLogField(execCtx, "resource_id", string(body))
-				log.Errorf(errCtx, "async reconcile execution failed")
-			}
-		}()
-	})
-	reconcileServer := &http.Server{
-		Addr:    ":" + ReconcileServerPort,
-		Handler: mux,
+	// Connect to database for message queue
+	dbCfg := config.Clients.Database
+	connStr := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
+		dbCfg.Host, dbCfg.Port, dbCfg.Name, dbCfg.Username, dbCfg.Password,
+		dbCfg.SSLMode)
+	if dbCfg.SSLMode == "" {
+		connStr = fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=disable",
+			dbCfg.Host, dbCfg.Port, dbCfg.Name, dbCfg.Username, dbCfg.Password)
 	}
-	go func() {
-		log.Infof(ctx, "Starting reconcile HTTP server on port %s", ReconcileServerPort)
-		if serveErr := reconcileServer.ListenAndServe(); serveErr != nil && serveErr != http.ErrServerClosed {
-			errCtx := logger.WithErrorField(ctx, serveErr)
-			log.Errorf(errCtx, "Reconcile server error")
-			healthServer.SetShuttingDown(true)
-			cancel()
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		errCtx := logger.WithErrorField(ctx, err)
+		log.Errorf(errCtx, "Failed to connect to database")
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
+	defer db.Close() //nolint:errcheck
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+
+	if err = db.PingContext(ctx); err != nil {
+		errCtx := logger.WithErrorField(ctx, err)
+		log.Errorf(errCtx, "Database ping failed")
+		return fmt.Errorf("database ping failed: %w", err)
+	}
+	log.Info(ctx, "Database connection established for message queue")
+
+	// Start message queue consumer
+	mqCfg := messagequeue.ConsumerConfig{
+		AdapterName: config.Adapter.Name,
+		Workers:     config.Clients.MessageQueue.Workers,
+		BatchSize:   config.Clients.MessageQueue.BatchSize,
+	}
+	if config.Clients.MessageQueue.PollInterval != "" {
+		if d, err := time.ParseDuration(config.Clients.MessageQueue.PollInterval); err == nil {
+			mqCfg.PollInterval = d
 		}
-	}()
+	}
+	consumer := messagequeue.NewConsumer(db, connStr, mqCfg, func(msgCtx context.Context, payload []byte) error {
+		result := exec.Execute(msgCtx, payload)
+		if result.Status == executor.StatusFailed {
+			return fmt.Errorf("execution failed")
+		}
+		return nil
+	}, log)
+	go consumer.Start(ctx)
 
 	// Mark as ready
 	healthServer.SetBrokerReady(true)
 	log.Info(ctx, "Adapter is ready to process events")
 
-	log.Info(ctx, "Adapter started, waiting for events...")
+	log.Info(ctx, "Adapter started, waiting for messages...")
 
 	// Wait for shutdown signal
 	<-ctx.Done()
 	log.Info(ctx, "Context canceled, shutting down...")
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	if shutdownErr := reconcileServer.Shutdown(shutdownCtx); shutdownErr != nil {
-		errCtx := logger.WithErrorField(ctx, shutdownErr)
-		log.Errorf(errCtx, "Reconcile server shutdown error")
-	}
 
 	log.Info(ctx, "Adapter shutdown complete")
 
